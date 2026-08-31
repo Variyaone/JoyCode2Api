@@ -6,7 +6,7 @@
 
 让 Claude Code、Cursor、Codex 直接用上 JoyCode 背后的模型
 
-`JoyAI-Code` · `Claude-Opus-4.7` · `GLM-5.1` · `Kimi-K2.6` · `MiniMax-M2.7` · `Doubao-Seed-2.0-pro`
+`JoyAI-Code` · `Claude-Opus-4.8` · `Claude-Opus-4.7` · `Claude-Sonnet-4.6` · `Claude-Opus-4.6` · `GLM-5.3` · `GLM-5.2-jcloud` · `GLM-5.1` · `Kimi-K3` · `Kimi-K3-jcloud` · `Kimi-K2.6` · `DeepSeek-V4-Pro` · `MiniMax-M3` · `Doubao-Seed-2.0-pro` · `GPT-5.6 Sol`
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react)](https://react.dev/)
@@ -45,7 +45,7 @@ Codex     ───┘    (协议翻译层)
 | **双协议兼容** | 同时实现 Anthropic Messages + OpenAI Chat Completions，Claude Code 和 Cursor 各走各的通道 |
 | **Tool Use 完整翻译** | Claude Code 的工具调用（读写文件、执行命令等）完整映射，不影响正常使用 |
 | **SSE 流式输出** | 实时流式返回，打字机效果 |
-| **多模型可选** | JoyAI-Code、Claude-Opus-4.7、GLM-5.1/5/4.7、Kimi-K2.6/2.5、MiniMax-M2.7、Doubao-Seed-2.0-pro |
+| **多模型可选** | 支持最新模型矩阵：JoyAI-Code、Claude-Opus-4.8/4.7/4.6、Claude-Sonnet-4.6、GLM-5.3/5.2-jcloud/5.1/5/4.7、Kimi-K3/K3-jcloud/K2.6/2.5、DeepSeek-V4-Pro、MiniMax-M3/M2.7、Doubao-Seed-2.0-pro、GPT-5.6 Sol |
 | **多账号管理** | Dashboard 扫码 / OAuth / 手动添加多个 JD 账号，每个账号独立 API Key |
 | **智能上下文截断** | 对话过长时自动截断早期消息，`/compact` 正常工作 |
 | **自带 Dashboard** | Web 界面管理账号、查看用量、模型分布、请求记录、系统设置 |
