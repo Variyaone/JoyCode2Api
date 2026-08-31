@@ -97,13 +97,10 @@ func IsNativeAnthropicModel(model string) bool {
 
 func resolveNativeAnthropicModel(model string, accountDefault string, systemDefault string) string {
 	resolved := resolveModel(model, accountDefault, systemDefault)
-	if resolved == "Claude-Opus-4.7" {
+	if IsNativeAnthropicModel(resolved) {
 		return resolved
 	}
-	if IsNativeAnthropicModel(resolved) {
-		return "Claude-Opus-4.7"
-	}
-	return resolved
+	return "Claude-Opus-4.8"
 }
 
 // convertToolsToOpenAI converts Anthropic-format tools to OpenAI function-calling format.

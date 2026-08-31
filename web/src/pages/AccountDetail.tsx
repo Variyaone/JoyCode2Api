@@ -23,17 +23,27 @@ import CommandTooltip from '../components/CommandTooltip';
 
 const BUILTIN_MODELS = [
   { label: 'JoyAI-Code（推荐）', value: 'JoyAI-Code' },
-  { label: 'Claude-Opus-4.7', value: 'Claude-Opus-4.7' },
+  { label: 'GLM-5.3', value: 'GLM-5.3' },
+  { label: 'GLM-5.2-jcloud', value: 'GLM-5.2-jcloud' },
   { label: 'GLM-5.1', value: 'GLM-5.1' },
   { label: 'GLM-5', value: 'GLM-5' },
   { label: 'GLM-4.7', value: 'GLM-4.7' },
+  { label: 'Kimi-K3', value: 'Kimi-K3' },
+  { label: 'Kimi-K3-jcloud', value: 'Kimi-K3-jcloud' },
   { label: 'Kimi-K2.6', value: 'Kimi-K2.6' },
   { label: 'Kimi-K2.5', value: 'Kimi-K2.5' },
+  { label: 'DeepSeek-V4-Pro', value: 'DeepSeek-V4-Pro' },
+  { label: 'MiniMax-M3', value: 'MiniMax-M3' },
   { label: 'MiniMax-M2.7', value: 'MiniMax-M2.7' },
+  { label: 'GPT-5.6 Sol', value: 'GPT-5.6 Sol' },
   { label: 'Doubao-Seed-2.0-pro', value: 'Doubao-Seed-2.0-pro' },
+  { label: 'Claude-Opus-4.8', value: 'Claude-Opus-4.8' },
+  { label: 'Claude-Opus-4.7', value: 'Claude-Opus-4.7' },
+  { label: 'Claude-Sonnet-4.6', value: 'Claude-Sonnet-4.6' },
+  { label: 'Claude-Opus-4.6', value: 'Claude-Opus-4.6' },
 ];
 
-const isClaudeModel = (model?: string) => model === 'Claude-Opus-4.7';
+const isClaudeModel = (model?: string) => Boolean(model && model.toLowerCase().startsWith('claude'));
 
 const PIE_COLORS = ['#22C55E', '#3B82F6', '#F59E0B', '#EF4444', '#A855F7', '#06B6D4', '#EC4899', '#84CC16'];
 
