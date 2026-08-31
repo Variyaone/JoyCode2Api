@@ -8,6 +8,8 @@
 
 `JoyAI-Code` · `Claude-Opus-4.8` · `Claude-Opus-4.7` · `Claude-Sonnet-4.6` · `Claude-Opus-4.6` · `GLM-5.3` · `GLM-5.2-jcloud` · `GLM-5.1` · `Kimi-K3` · `Kimi-K3-jcloud` · `Kimi-K2.6` · `DeepSeek-V4-Pro` · `MiniMax-M3` · `Doubao-Seed-2.0-pro` · `GPT-5.6 Sol`
 
+20260831：在原仓库基础上更新了前端支持最新的Kimi-k3、GLM-5.3等最新选项
+
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react)](https://react.dev/)
 [![License](https://img.shields.io/badge/License-Apache_2.0-blue?style=flat)](./LICENSE)
