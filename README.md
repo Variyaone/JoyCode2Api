@@ -8,7 +8,7 @@
 
 `JoyAI-Code` · `Claude-Opus-4.8` · `Claude-Opus-4.7` · `Claude-Sonnet-4.6` · `Claude-Opus-4.6` · `GLM-5.3` · `GLM-5.2-jcloud` · `GLM-5.1` · `Kimi-K3` · `Kimi-K3-jcloud` · `Kimi-K2.6` · `DeepSeek-V4-Pro` · `MiniMax-M3` · `Doubao-Seed-2.0-pro` · `GPT-5.6 Sol`
 
-20260831：在原仓库基础上更新了前端支持最新的Kimi-k3、GLM-5.3等最新选项
+20260910：修复 GPT-5.6 Sol（新增 Responses API 通道）、修复 Claude 系列经代理无输出（-hq 模型名映射）；Dashboard 新增模型能力矩阵与请求明细监控。实测 GLM/Kimi/DeepSeek/Claude 均支持约 1M 真实上下文。
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react)](https://react.dev/)
