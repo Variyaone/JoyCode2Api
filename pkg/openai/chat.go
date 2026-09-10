@@ -31,13 +31,244 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 	}
 	model := ResolveModel(req.Model, store.GetAccountDefaultModel(r), systemDefault)
 		store.SetModel(r, model)
-		jcBody := TranslateRequest(&req)
 	client := s.getClient(r)
+	if joycode.IsResponsesAPIModel(model) {
+		s.handleResponsesModel(w, r, client, &req, model)
+		return
+	}
+	jcBody := TranslateRequest(&req)
 	if req.Stream {
 		s.handleStreamChat(w, r, client, jcBody, model)
 	} else {
 		s.handleNonStreamChat(w, r, client, jcBody, model)
 	}
+}
+
+// handleResponsesModel routes GPT-family models through the OpenAI Responses
+// API (functionId=responses_completions). The upstream chat/completions path
+// rejects these models with error 1032.
+func (s *Server) handleResponsesModel(w http.ResponseWriter, r *http.Request, client *joycode.Client, req *ChatRequest, model string) {
+	body := joycode.ChatToResponses(TranslateRequest(req))
+	if req.Stream {
+		s.handleResponsesStream(w, r, client, body, model)
+	} else {
+		s.handleResponsesNonStream(w, r, client, body, model)
+	}
+}
+
+func (s *Server) handleResponsesNonStream(w http.ResponseWriter, r *http.Request, client *joycode.Client, body map[string]interface{}, model string) {
+	// The upstream ignores stream:false and always returns SSE, so we always
+	// stream and aggregate the result into a single completion object.
+	body["stream"] = true
+	resp, err := client.PostStream("/api/saas/openai/v1/responses", body)
+	if err != nil {
+		slog.Error("responses non-stream upstream error", "model", model, "error", err)
+		msg := err.Error()
+		code := 500
+		if isTimeoutError(msg) {
+			code = 504
+			msg = "上游服务响应超时，请稍后重试。原始错误: " + msg
+		}
+		writeError(w, code, msg)
+		return
+	}
+	defer resp.Body.Close()
+
+	st := &ResponsesStreamState{Model: model, toolCalls: map[string]*responsesToolCall{}}
+	var text strings.Builder
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		for strings.HasPrefix(line, "data:") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		}
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		if isResponsesError(line) {
+			writeError(w, 500, line)
+			return
+		}
+		for _, chunkJSON := range st.Feed(line) {
+			var chunk struct {
+				Choices []struct {
+					Delta struct {
+						Content   string `json:"content"`
+						ToolCalls []struct {
+							Function struct {
+								Name      string `json:"name"`
+								Arguments string `json:"arguments"`
+							} `json:"function"`
+						} `json:"tool_calls"`
+					} `json:"delta"`
+				} `json:"choices"`
+			}
+			if json.Unmarshal([]byte(chunkJSON), &chunk) == nil && len(chunk.Choices) > 0 {
+				if chunk.Choices[0].Delta.Content != "" {
+					text.WriteString(chunk.Choices[0].Delta.Content)
+				}
+			}
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		slog.Error("responses non-stream read error", "model", model, "error", err)
+		writeError(w, 500, err.Error())
+		return
+	}
+	// Collect tool calls from the state
+	var toolCalls []interface{}
+	for _, tc := range st.sortedToolCalls() {
+		toolCalls = append(toolCalls, map[string]interface{}{
+			"id":   tc.ID,
+			"type": "function",
+			"function": map[string]interface{}{
+				"name":      tc.Name,
+				"arguments": tc.Arguments,
+			},
+		})
+	}
+	message := map[string]interface{}{"role": "assistant", "content": text.String()}
+	finish := "stop"
+	if len(toolCalls) > 0 {
+		message["tool_calls"] = toolCalls
+		finish = "tool_calls"
+	}
+	inTk, outTk := st.Usage()
+	if inTk > 0 || outTk > 0 {
+		store.SetTokenUsage(r, inTk, outTk)
+	}
+	writeJSON(w, 200, map[string]interface{}{
+		"id":      "chatcmpl-" + newShortID(),
+		"object":  "chat.completion",
+		"created": time.Now().Unix(),
+		"model":   model,
+		"choices": []interface{}{map[string]interface{}{
+			"index":         0,
+			"message":       message,
+			"finish_reason": finish,
+		}},
+		"usage": map[string]interface{}{
+			"prompt_tokens":     inTk,
+			"completion_tokens": outTk,
+		},
+	})
+}
+
+func (s *Server) handleResponsesStream(w http.ResponseWriter, r *http.Request, client *joycode.Client, body map[string]interface{}, model string) {
+	flusher, ok := w.(http.Flusher)
+	if !ok {
+		slog.Error("streaming not supported by response writer")
+		return
+	}
+	body["stream"] = true
+
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "close")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(200)
+
+	stopHeartbeat := make(chan struct{})
+	heartbeatDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		defer close(heartbeatDone)
+		for {
+			select {
+			case <-stopHeartbeat:
+				return
+			case <-ticker.C:
+				if _, err := w.Write([]byte(": keepalive\n\n")); err != nil {
+					return
+				}
+				flusher.Flush()
+			}
+		}
+	}()
+
+	resp, err := client.PostStream("/api/saas/openai/v1/responses", body)
+	if err != nil {
+		close(stopHeartbeat)
+		<-heartbeatDone
+		slog.Error("responses stream upstream error", "model", model, "error", err)
+		msg := err.Error()
+		if isTimeoutError(msg) {
+			msg = "上游服务响应超时，请稍后重试。原始错误: " + msg
+		}
+		fmt.Fprintf(w, "data: {\"error\":{\"message\":\"%s\"}}\n\n", msg)
+		flusher.Flush()
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+		return
+	}
+	defer resp.Body.Close()
+	close(stopHeartbeat)
+	<-heartbeatDone
+
+	st := &ResponsesStreamState{Model: model, toolCalls: map[string]*responsesToolCall{}}
+	sawDone := false
+	sawError := false
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// The upstream double-wraps SSE: "data: event: x" / "data: data: {...}".
+		for strings.HasPrefix(line, "data:") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		}
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		if isResponsesError(line) {
+			sawError = true
+			slog.Warn("responses stream upstream error", "model", model, "payload", common.Truncate(line, 300))
+			fmt.Fprintf(w, "data: %s\n\n", line)
+			flusher.Flush()
+			continue
+		}
+		for _, chunk := range st.Feed(line) {
+			fmt.Fprintf(w, "data: %s\n\n", chunk)
+			flusher.Flush()
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		slog.Error("responses stream read error", "model", model, "error", err)
+	}
+	if !sawError {
+		for _, chunk := range st.Finalize() {
+			fmt.Fprintf(w, "data: %s\n\n", chunk)
+			flusher.Flush()
+		}
+	}
+	if !sawDone {
+		fmt.Fprint(w, "data: [DONE]\n\n")
+		flusher.Flush()
+	}
+	if inTk, outTk := st.Usage(); inTk > 0 || outTk > 0 {
+		store.SetTokenUsage(r, inTk, outTk)
+	}
+}
+
+// isResponsesError detects upstream error payloads in a Responses SSE line.
+func isResponsesError(line string) bool {
+	var parsed struct {
+		Type   string      `json:"type"`
+		Error  interface{} `json:"error"`
+		Code   interface{} `json:"code"`
+		Status string      `json:"status"`
+	}
+	if err := json.Unmarshal([]byte(line), &parsed); err != nil {
+		return false
+	}
+	if parsed.Type == "error" || parsed.Error != nil || parsed.Status == "FAILED_RESPONSE" {
+		return true
+	}
+	if parsed.Code != nil && parsed.Type == "" {
+		return true
+	}
+	return false
 }
 
 func (s *Server) handleNonStreamChat(w http.ResponseWriter, r *http.Request, client *joycode.Client, jcBody map[string]interface{}, model string) {

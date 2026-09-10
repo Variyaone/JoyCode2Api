@@ -81,13 +81,16 @@ func normalizeAnthropicSystem(raw json.RawMessage) interface{} {
 }
 
 // ClaudeNativeEnabled reports whether the native Anthropic code path is active.
-// Guarded by the "enable_claude" store setting — defaults to false until the
-// upstream JoyCode platform makes Claude models generally available.
+// The upstream JoyCode platform now serves Claude models via the native
+// /api/saas/anthropic/v1/messages endpoint, so this defaults to ENABLED
+// (opt-out). Claude-family models reject the legacy OpenAI path, so routing
+// them through the OpenAI endpoint yields empty/no output. Set the
+// "enable_claude" store setting to "false" explicitly to force the legacy path.
 func ClaudeNativeEnabled(s *store.Store) bool {
 	if s == nil {
-		return false
+		return true
 	}
-	return s.GetSetting("enable_claude") == "true"
+	return s.GetSetting("enable_claude") != "false"
 }
 
 func IsNativeAnthropicModel(model string) bool {
@@ -95,12 +98,25 @@ func IsNativeAnthropicModel(model string) bool {
 	return strings.HasPrefix(m, "claude") || strings.Contains(m, "claude-")
 }
 
+// nativeAnthropicAPINames maps label names to the upstream anthropic
+// endpoint's internal model ids (chatApiModel from joycode_modelList —
+// the Claude family requires the -hq suffix, the bare label returns 6002).
+var nativeAnthropicAPINames = map[string]string{
+	"Claude-Opus-4.8":   "Claude-Opus-4.8-hq",
+	"Claude-Opus-4.7":   "Claude-Opus-4.7-hq",
+	"Claude-Sonnet-4.6": "Claude-Sonnet-4.6-hq",
+	"Claude-Opus-4.6":   "Claude-Opus-4.6-hq",
+}
+
 func resolveNativeAnthropicModel(model string, accountDefault string, systemDefault string) string {
 	resolved := resolveModel(model, accountDefault, systemDefault)
 	if IsNativeAnthropicModel(resolved) {
+		if api, ok := nativeAnthropicAPINames[resolved]; ok {
+			return api
+		}
 		return resolved
 	}
-	return "Claude-Opus-4.8"
+	return "Claude-Opus-4.8-hq"
 }
 
 // convertToolsToOpenAI converts Anthropic-format tools to OpenAI function-calling format.

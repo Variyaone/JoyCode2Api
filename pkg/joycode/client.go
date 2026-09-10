@@ -49,6 +49,7 @@ type colorEndpoint struct {
 
 var colorEndpoints = map[string]colorEndpoint{
 	"/api/saas/openai/v1/chat/completions": {"chat_completions", "/api/saas/openai/v2/chat/completions"},
+	"/api/saas/openai/v1/responses":        {"responses_completions", "/api/saas/openai/v1/responses"},
 	"/api/saas/models/v1/modelList":        {"joycode_modelList", "/api/saas/models/v2/modelList"},
 	"/api/saas/openai/v1/web-search":       {"web_search", "/api/saas/openai/v2/web-search"},
 	"/api/saas/user/v1/userInfo":           {"joycode_userInfo", "/api/saas/user/v2/userInfo"},
@@ -75,6 +76,15 @@ var Models = []string{
 	"MiniMax-M2.7",
 	"GPT-5.6 Sol",
 	"Doubao-Seed-2.0-pro",
+}
+
+// IsResponsesAPIModel reports whether the model is served through the OpenAI
+// Responses API (/api/saas/openai/v1/responses) rather than chat completions.
+// GPT-family models on the JoyCode platform reject the chat path with
+// error 1032, and the IDE routes them through the Responses endpoint.
+func IsResponsesAPIModel(model string) bool {
+	m := strings.ToLower(model)
+	return strings.HasPrefix(m, "gpt")
 }
 
 type Client struct {

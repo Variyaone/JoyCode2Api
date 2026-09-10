@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-09-10
+
+### Added
+- **GPT-5.6 Sol 全链路支持（Responses API 通道）**：
+  - GPT 系模型只接受 OpenAI Responses API，旧 Chat Completions 通道对其返回错误。新增 `responses_completions` 网关端点与双向协议翻译层（`pkg/joycode/responses_translate.go`、`pkg/openai/responses.go`）。
+  - 四条路径（Anthropic 流式/非流式、OpenAI 流式/非流式）全部打通；Claude Code 的工具调用循环（function_call 生成 → 参数传递 → tool_result 回传）验证通过。
+  - 按模型名前缀自动分流（`IsResponsesAPIModel`），调用方无感知。
+  - 支持 Responses 内置 `web_search` 工具（`tools: [{"type":"web_search"}]`）。
+- **Dashboard 模型能力矩阵**：新增 `/api/model-capabilities` 端点与前端面板，展示每个模型实测的 API 通道、多模态、推理、联网搜索与真实上下文上限（隐藏码字召回法探测）。
+- **Dashboard 请求明细**：新增 `/api/recent-logs` 端点与前端表格，展示最近请求的模型、端点、状态码、延迟、Token 用量与错误信息（此前只有错误列表，正常请求不可见）。
+
+### Fixed
+- **修复 Claude 系列经代理无输出（EOF）**：上游原生 Anthropic 端点要求内部模型名带 `-hq` 后缀（如 `Claude-Opus-4.8-hq`），此前代理发送裸名导致 6002 错误。现已自动映射全部 Claude 模型。
+- **修复 GPT 流式空回复**：上游 `stream:false` 时也返回 SSE，非流式路径改为流式聚合；reasoning 模型小 `max_tokens`（<4096）会被内部推理消耗光导致正文为空（`incomplete_details.reason=max_output_tokens`），现对小于 4096 的值不传该参数。
+- **修复工具 schema 丢失**：`input_schema`（`json.RawMessage`）类型断言失败导致工具参数定义序列化为空 `{}`，模型收不到参数结构、调用参数为空。现兼容 RawMessage / map / string 三种形态。
+
+### Changed
+- **真实上下文上限**：实测 GLM-5.3 / Kimi-K3 / DeepSeek-V4-Pro / Claude 全系均可接受约 100 万 token（官方标称 200k 为保守值）；Claude 后端为 Bedrock，硬上限 1,000,000 token。上游请求体硬上限 5MB。
+
 ## [Unreleased] - 2026-08-31
 
 ### Added
@@ -14,6 +33,11 @@ All notable changes to this project will be documented in this file.
   - **OpenAI 系列**：GPT-5.6 Sol
 - **Windows 便捷启动脚本**：
   - 新增 `启动JoyCode2Api.bat`，双击即可一键以 HTTP 模式（`--tls=false --skip-validation`）启动本地代理服务。
+
+### Fixed
+- **修复 Claude 系列模型无输出问题**：
+  - `enable_claude` 开关改为默认开启（opt-out 语义）。此前默认关闭时，Claude 请求会降级走旧 OpenAI 路径，而 Claude 原生模型会拒绝该路径，导致客户端无任何输出。
+  - 现在 Claude 请求默认走原生 Anthropic 端点 `/api/saas/anthropic/v1/messages`；如需强制回退旧路径，可显式将 `enable_claude` 设为 `"false"`。
 
 ### Changed
 - **模型路由与能力匹配**：

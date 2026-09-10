@@ -45,11 +45,14 @@ Codex     ───┘    (协议翻译层)
 | 特性 | 说明 |
 |------|------|
 | **双协议兼容** | 同时实现 Anthropic Messages + OpenAI Chat Completions，Claude Code 和 Cursor 各走各的通道 |
-| **Tool Use 完整翻译** | Claude Code 的工具调用（读写文件、执行命令等）完整映射，不影响正常使用 |
-| **SSE 流式输出** | 实时流式返回，打字机效果 |
-| **多模型可选** | 支持最新模型矩阵：JoyAI-Code、Claude-Opus-4.8/4.7/4.6、Claude-Sonnet-4.6、GLM-5.3/5.2-jcloud/5.1/5/4.7、Kimi-K3/K3-jcloud/K2.6/2.5、DeepSeek-V4-Pro、MiniMax-M3/M2.7、Doubao-Seed-2.0-pro、GPT-5.6 Sol |
+| **三通道智能路由** | 按模型自动分流：Claude 走原生 Anthropic 端点、GPT 走 Responses API、其余走 Chat Completions，无需配置 |
+| **Tool Use 完整翻译** | Claude Code 的工具调用（读写文件、执行命令等）完整映射，GPT 的 function_call / function_call_output 双向翻译 |
+| **SSE 流式输出** | 实时流式返回，打字机效果；非流式请求自动聚合上游 SSE |
+| **多模型可选** | JoyAI-Code-1.5、Claude-Opus-4.8/4.7/4.6、Claude-Sonnet-4.6、GLM-5.3/5.2-jcloud、Kimi-K3/K3-jcloud、DeepSeek-V4-Pro、MiniMax-M3、Doubao-Seed-2.0-pro、GPT-5.6 Sol |
 | **多账号管理** | Dashboard 扫码 / OAuth / 手动添加多个 JD 账号，每个账号独立 API Key |
 | **智能上下文截断** | 对话过长时自动截断早期消息，`/compact` 正常工作 |
+| **模型能力矩阵** | Dashboard 展示每个模型实测的 API 通道、多模态、推理、联网搜索、真实上下文上限 |
+| **请求明细监控** | Dashboard 展示最近请求的模型、端点、状态码、延迟、Token 用量与错误信息 |
 | **自带 Dashboard** | Web 界面管理账号、查看用量、模型分布、请求记录、系统设置 |
 | **凭据保活** | 后台定时刷新过期账号凭据，避免长时间不用失效 |
 | **单文件部署** | 前端打包进 Go 二进制，丢一个文件就能跑，也支持 Docker / 系统服务 |
@@ -290,6 +293,31 @@ docker compose up -d --build
 
 ---
 
+## 模型能力矩阵（2026-09-10 实测）
+
+以下数据来自对 JoyCode 上游的真实探测（隐藏码字召回法测真实上下文、base64 图片测多模态、内置工具测联网搜索）：
+
+| 模型 | API 通道 | 多模态 | 推理 | 联网搜索 | 官方标称 | 实测上下文 |
+|------|---------|--------|------|---------|---------|-----------|
+| GLM-5.3 / GLM-5.2-jcloud | chat | ❌ | ✓ | ❌ | 200k | **1M** |
+| Kimi-K3 / Kimi-K3-jcloud | chat | ✓ | ✓ | ❌ | 200k | **1M** |
+| DeepSeek-V4-Pro | chat | ❌ | ✓ | ❌ | 200k | **1M** |
+| MiniMax-M3 | chat | ❌ | ✓ | ❌ | 200k | ~936k |
+| Doubao-Seed-2.0-pro | chat | ❌ | ❌ | ❌ | 200k | ~220k |
+| JoyAI-Code-1.5 | chat | ❌ | ❌ | ❌ | 200k | ~180k |
+| GPT-5.6 Sol | responses | ✓ | ✓ | ✓ 内置工具 | 200k | ~910k |
+| Claude-Opus-4.8 / 4.7 / 4.6、Claude-Sonnet-4.6 | anthropic | ✓ | ❌ | ❌ | 200k | **1M**（Bedrock 硬上限） |
+
+说明：
+
+- **GPT-5.6 Sol** 只接受 OpenAI **Responses API**（`responses_completions` 网关），旧 Chat Completions 通道对其返回错误；本代理已内置自动分流，调用方无感知。
+- **Claude 系列**走上游原生 Anthropic 端点，内部模型名需 `-hq` 后缀（如 `Claude-Opus-4.8-hq`），代理已自动映射。
+- **联网搜索**：GPT-5.6 Sol 支持 Responses 内置 `web_search` 工具（请求 `tools: [{"type":"web_search"}]`）；所有模型均可配合独立 `/v1/web-search` 端点。
+- **图片/视频生成**：上游无此能力（GPT 的 `image_generation` 工具需要网关专有 header，无法激活）。
+- 上游请求体硬上限 **5MB**（约 100 万英文 token）。
+
+---
+
 ## API 参考
 
 ### 代理端点
@@ -303,6 +331,15 @@ docker compose up -d --build
 | `GET` | `/v1/models` | 可用模型列表 |
 | `GET` | `/health` | 健康检查 |
 | `GET` | `/` | Dashboard 管理界面 |
+
+### Dashboard 端点（JWT 鉴权）
+
+| 方法 | 路径 | 说明 |
+|------|------|------|
+| `GET` | `/api/model-capabilities` | 模型能力矩阵（实测上下文/多模态/搜索等） |
+| `GET` | `/api/recent-logs?limit=N` | 最近请求明细（模型/端点/状态/延迟/Token） |
+| `GET` | `/api/errors?limit=N` | 最近错误请求 |
+| `GET` | `/api/stats` | 用量统计（今日/累计/按模型/按账号/24h 时序） |
 
 ### 鉴权
 

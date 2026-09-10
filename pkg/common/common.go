@@ -15,7 +15,9 @@ func IsTimeoutError(err error) bool {
 	return strings.Contains(lower, "context deadline exceeded") ||
 		strings.Contains(lower, "client.timeout exceeded") ||
 		strings.Contains(lower, "deadline exceeded") ||
-		strings.Contains(lower, "i/o timeout")
+		strings.Contains(lower, "i/o timeout") ||
+		strings.Contains(lower, "read: connection reset") ||
+		strings.Contains(lower, "connection reset by peer")
 }
 
 // Truncate shortens s to at most maxLen bytes, appending "..." if it was

@@ -66,6 +66,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/qr-login/init", h.handleQRLoginInit)
 	mux.HandleFunc("/api/qr-login/status", h.handleQRLoginStatus)
 	mux.HandleFunc("/api/models", h.handleModels)
+	mux.HandleFunc("/api/model-capabilities", h.handleModelCapabilities)
+	mux.HandleFunc("/api/recent-logs", h.handleRecentLogs)
 	mux.HandleFunc("/api/stats", h.handleStats)
 	mux.HandleFunc("/api/settings", h.handleSettings)
 	mux.HandleFunc("/api/health", h.handleHealth)
@@ -1326,6 +1328,93 @@ func modelInfos(models []string) []map[string]string {
 }
 
 // --- Stats Handler ---
+
+// ModelCapabilityRow is one row of the measured model capability matrix.
+// Values were verified against the live upstream on 2026-09-10 by probing
+// each model's native API with calibrated token fillers (see probe notes
+// per field).
+type ModelCapabilityRow struct {
+	ID            string `json:"id"`
+	ChatAPIModel  string `json:"chat_api_model"`
+	API           string `json:"api"`               // chat | responses | anthropic
+	Vision        bool   `json:"vision"`             // tested with base64 PNG
+	Reasoning     bool   `json:"reasoning"`
+	WebSearch     bool   `json:"web_search"`          // built-in tool
+	ImageGen      bool   `json:"image_gen"`
+	MaxOutput     int    `json:"max_output_tokens"`  // advertised respMaxTokens
+	AdvertisedCtx int    `json:"advertised_ctx"`      // upstream maxTotalTokens label
+	MeasuredCtx   int    `json:"measured_ctx"`        // verified by recall test
+	Notes         string `json:"notes,omitempty"`
+}
+
+// modelCapabilities is the measured matrix. MeasuredCtx values come from
+// binary-search recall probes: send N tokens of code filler with a secret
+// code word at the start, ask for the word at the end; the largest N that
+// still recalls it is the real context window (upstream labels claim 200k
+// for everything, but most models actually accept ~1M).
+var modelCapabilities = []ModelCapabilityRow{
+	{"GLM-5.3", "GLM-5.3", "chat", false, true, false, false, 64000, 200000, 1000000, "1M 实测可用（990k 召回成功）"},
+	{"GLM-5.2-jcloud", "GLM-5.2-jcloud", "chat", false, true, false, false, 64000, 200000, 1000000, ""},
+	{"Kimi-K3", "Kimi-K3", "chat", true, true, false, false, 64000, 200000, 1000000, "vision 走 image_url 格式"},
+	{"Kimi-K3-jcloud", "Kimi-K3-jcloud", "chat", true, true, false, false, 64000, 200000, 1000000, ""},
+	{"DeepSeek-V4-Pro", "DeepSeek-V4-Pro", "chat", false, true, false, false, 64000, 200000, 1000000, ""},
+	{"MiniMax-M3", "MiniMax-M3", "chat", false, true, false, false, 64000, 200000, 936000, "936k 以上 400"},
+	{"Doubao-Seed-2.0-pro", "Doubao-Seed-2.0-pro", "chat", false, false, false, false, 64000, 200000, 220000, "220k 实测上限"},
+	{"JoyAI-Code-1.5", "JoyAI-Code-1.5", "chat", false, false, false, false, 64000, 200000, 180000, "180k 实测上限"},
+	{"GPT-5.6 Sol", "GPT-5.6 Sol", "responses", true, true, true, false, 64000, 200000, 910000, "内置 web_search 工具；image_gen 需网关专有 header 不可用"},
+	{"Claude-Opus-4.8", "Claude-Opus-4.8-hq", "anthropic", true, false, false, false, 64000, 200000, 1000000, "Bedrock 1M 上限，991k 召回成功"},
+	{"Claude-Opus-4.7", "Claude-Opus-4.7-hq", "anthropic", true, false, false, false, 64000, 200000, 1000000, ""},
+	{"Claude-Sonnet-4.6", "Claude-Sonnet-4.6-hq", "anthropic", true, false, false, false, 64000, 200000, 1000000, ""},
+	{"Claude-Opus-4.6", "Claude-Opus-4.6-hq", "anthropic", true, false, false, false, 64000, 200000, 1000000, ""},
+}
+
+func (h *Handler) handleModelCapabilities(w http.ResponseWriter, r *http.Request) {
+	setCors(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{
+		"models":           modelCapabilities,
+		"upstream_cap_ctx": 1000000,
+		"request_body_cap": 5242880,
+		"probed_at":        "2026-09-10",
+	})
+}
+
+func (h *Handler) handleRecentLogs(w http.ResponseWriter, r *http.Request) {
+	setCors(w)
+	if r.Method == http.MethodOptions {
+		w.WriteHeader(http.StatusNoContent)
+		return
+	}
+	if r.Method != http.MethodGet {
+		writeError(w, http.StatusMethodNotAllowed, "method not allowed")
+		return
+	}
+	limit := 100
+	if l := r.URL.Query().Get("limit"); l != "" {
+		if n, err := fmt.Sscanf(l, "%d", &limit); err == nil && n == 1 && limit > 0 && limit <= 500 {
+			// ok
+		} else {
+			limit = 100
+		}
+	}
+	logs, err := h.store.GetRecentLogs(limit)
+	if err != nil {
+		slog.Error("get recent logs", "error", err)
+		writeError(w, http.StatusInternalServerError, err.Error())
+		return
+	}
+	if logs == nil {
+		logs = []store.RequestLog{}
+	}
+	writeJSON(w, http.StatusOK, map[string]interface{}{"logs": logs, "total": len(logs)})
+}
 
 func (h *Handler) handleStats(w http.ResponseWriter, r *http.Request) {
 	setCors(w)

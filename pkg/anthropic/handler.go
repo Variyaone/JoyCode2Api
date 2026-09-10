@@ -112,6 +112,115 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 
 	jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
 	logRequestDetails(r, "translated request (non-stream)", jcBody)
+	if joycode.IsResponsesAPIModel(resolveModel(req.Model, store.GetAccountDefaultModel(r), systemDefault)) {
+		// The upstream always returns SSE even for stream:false, so stream and
+		// aggregate into a single Anthropic message.
+		jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+		jcBody["stream"] = true
+		respBody := joycode.ChatToResponses(jcBody)
+		resp, err := client.PostStream("/api/saas/openai/v1/responses", respBody)
+		if err != nil {
+			reqLog(r).Error("responses (non-stream) upstream error", "error", err)
+			msg := err.Error()
+			if isTimeoutError(err) {
+				writeAnthropicError(w, 504, "上游服务响应超时，请稍后重试。原始错误: "+msg)
+				return
+			}
+			writeAnthropicError(w, 500, msg)
+			return
+		}
+		defer resp.Body.Close()
+
+		scanner := bufio.NewScanner(resp.Body)
+		scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+		var text strings.Builder
+		var inTk, outTk int
+		toolCalls := []ContentBlock{}
+		toolNames := map[string]string{}
+		toolOrder := []string{}
+		for scanner.Scan() {
+			line := strings.TrimSpace(scanner.Text())
+			for strings.HasPrefix(line, "data:") {
+				line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+			}
+			if line == "" || !strings.HasPrefix(line, "{") {
+				continue
+			}
+			var ev struct {
+				Type   string `json:"type"`
+				Delta  string `json:"delta"`
+				Item   *struct {
+					ID        string `json:"id"`
+					Type      string `json:"type"`
+					CallID    string `json:"call_id"`
+					Name      string `json:"name"`
+					Arguments string `json:"arguments"`
+				} `json:"item"`
+				Response *struct {
+					Usage *struct {
+						InputTokens  int `json:"input_tokens"`
+						OutputTokens int `json:"output_tokens"`
+					} `json:"usage"`
+				} `json:"response"`
+			}
+			if err := json.Unmarshal([]byte(line), &ev); err != nil {
+				continue
+			}
+			switch ev.Type {
+			case "response.output_text.delta":
+				text.WriteString(ev.Delta)
+			case "response.output_item.done":
+				if ev.Item != nil && ev.Item.Type == "function_call" {
+					key := ev.Item.CallID
+					if key == "" {
+						key = ev.Item.ID
+					}
+					if _, ok := toolNames[key]; !ok {
+						toolOrder = append(toolOrder, key)
+					}
+					if ev.Item.Name != "" {
+						toolNames[key] = ev.Item.Name
+					}
+					args := ev.Item.Arguments
+					if args == "" || !json.Valid([]byte(args)) {
+						args = "{}"
+					}
+					toolCalls = append(toolCalls, ContentBlock{
+						Type: "tool_use", ID: key, Name: toolNames[key], Input: json.RawMessage(args),
+					})
+				}
+			case "response.completed":
+				if ev.Response != nil && ev.Response.Usage != nil {
+					inTk = ev.Response.Usage.InputTokens
+					outTk = ev.Response.Usage.OutputTokens
+				}
+			case "error", "response.failed":
+				writeAnthropicError(w, 500, truncate(line, 500))
+				return
+			}
+		}
+		content := []ContentBlock{}
+		if text.Len() > 0 {
+			content = append(content, ContentBlock{Type: "text", Text: text.String()})
+		}
+		content = append(content, toolCalls...)
+		if len(content) == 0 {
+			content = []ContentBlock{{Type: "text", Text: ""}}
+		}
+		stopReason := "end_turn"
+		if len(toolCalls) > 0 {
+			stopReason = "tool_use"
+		}
+		if inTk > 0 || outTk > 0 {
+			store.SetTokenUsage(r, inTk, outTk)
+		}
+		writeAnthropicJSON(w, 200, &MessageResponse{
+			ID: NewMessageID(), Type: "message", Role: "assistant",
+			Content: content, Model: req.Model, StopReason: &stopReason,
+			Usage: Usage{InputTokens: inTk, OutputTokens: outTk},
+		})
+		return
+	}
 	maxRetries := 3
 	if h.store != nil {
 		maxRetries = h.store.GetIntSetting("max_retries", 3)
@@ -214,6 +323,10 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 	}
 	if ClaudeNativeEnabled(h.store) && (IsNativeAnthropicModel(req.Model) || IsNativeAnthropicModel(resolveModel(req.Model, store.GetAccountDefaultModel(r), systemDefault))) {
 		h.handleNativeAnthropicStream(w, r, req, client, flusher, systemDefault)
+		return
+	}
+	if joycode.IsResponsesAPIModel(resolveModel(req.Model, store.GetAccountDefaultModel(r), systemDefault)) {
+		h.handleResponsesStream(w, r, req, client, flusher, systemDefault)
 		return
 	}
 
@@ -512,6 +625,261 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 	}
 }
 
+func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, req *MessageRequest, client *joycode.Client, flusher http.Flusher, systemDefault string) {
+	jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+	jcBody["stream"] = true
+	body := joycode.ChatToResponses(jcBody)
+	logRequestDetails(r, "translated responses request (stream)", body)
+
+	// Commit SSE headers + message_start early so we can send heartbeat ping
+	// events while waiting for the upstream to respond.
+	w.Header().Set("Content-Type", "text/event-stream")
+	w.Header().Set("Cache-Control", "no-cache")
+	w.Header().Set("Connection", "keep-alive")
+	w.Header().Set("Access-Control-Allow-Origin", "*")
+	w.WriteHeader(200)
+
+	msgID := NewMessageID()
+	model := req.Model
+
+	FormatSSE(w, "message_start", sseMessageStart{
+		Type: "message_start",
+		Message: MessageResponse{
+			ID: msgID, Type: "message", Role: "assistant",
+			Model: model, Content: []ContentBlock{}, Usage: Usage{},
+		},
+	})
+	FormatSSE(w, "ping", ssePing{Type: "ping"})
+	flusher.Flush()
+
+	stopHeartbeat := make(chan struct{})
+	heartbeatDone := make(chan struct{})
+	go func() {
+		ticker := time.NewTicker(5 * time.Second)
+		defer ticker.Stop()
+		defer close(heartbeatDone)
+		for {
+			select {
+			case <-stopHeartbeat:
+				return
+			case <-ticker.C:
+				FormatSSE(w, "ping", ssePing{Type: "ping"})
+				flusher.Flush()
+			}
+		}
+	}()
+
+	resp, err := client.PostStream("/api/saas/openai/v1/responses", body)
+	close(stopHeartbeat)
+	<-heartbeatDone
+	if err != nil {
+		reqLog(r).Error("responses stream failed", "error", err)
+		writeStreamError(w, flusher, err.Error())
+		return
+	}
+	defer resp.Body.Close()
+
+	scanner := bufio.NewScanner(resp.Body)
+	scanner.Buffer(make([]byte, 0, 64*1024), 1024*1024)
+
+	currentBlockIndex := 0
+	textBlockStarted := false
+	toolBlockStarted := map[string]bool{}
+	toolOrder := []string{}
+	toolIDs := map[string]string{}
+	toolNames := map[string]string{}
+	toolArgs := map[string]string{}
+	var inTk, outTk int
+	sawError := false
+
+	flushToolCalls := func() {
+		for _, key := range toolOrder {
+			if !toolBlockStarted[key] {
+				toolBlockStarted[key] = true
+				id := toolIDs[key]
+				if id == "" {
+					id = "toolu_" + newID()
+				}
+				args := toolArgs[key]
+				if args == "" || !json.Valid([]byte(args)) {
+					args = "{}"
+				}
+				FormatSSE(w, "content_block_start", sseContentBlockStart{
+					Type: "content_block_start", Index: currentBlockIndex,
+					ContentBlock: ContentBlock{Type: "tool_use", ID: id, Name: toolNames[key]},
+				})
+				// Anthropic clients expect arguments to arrive via
+				// input_json_delta, not on the start block.
+				FormatSSE(w, "content_block_delta", sseContentBlockDelta{
+					Type: "content_block_delta", Index: currentBlockIndex,
+					Delta: deltaText{Type: "input_json_delta", PartialJSON: args},
+				})
+				FormatSSE(w, "content_block_stop", sseContentBlockStop{Type: "content_block_stop", Index: currentBlockIndex})
+				currentBlockIndex++
+				flusher.Flush()
+			}
+		}
+	}
+
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		// Upstream double-wraps SSE lines ("data: event: x" / "data: data: {...}").
+		for strings.HasPrefix(line, "data:") {
+			line = strings.TrimSpace(strings.TrimPrefix(line, "data:"))
+		}
+		if line == "" || !strings.HasPrefix(line, "{") {
+			continue
+		}
+		var ev struct {
+			Type   string `json:"type"`
+			Delta  string `json:"delta"`
+			Item   *struct {
+				ID        string `json:"id"`
+				Type      string `json:"type"`
+				CallID    string `json:"call_id"`
+				Name      string `json:"name"`
+				Arguments string `json:"arguments"`
+			} `json:"item"`
+			Response *struct {
+				Usage *struct {
+					InputTokens  int `json:"input_tokens"`
+					OutputTokens int `json:"output_tokens"`
+				} `json:"usage"`
+			} `json:"response"`
+			Usage *struct {
+				InputTokens  int `json:"input_tokens"`
+				OutputTokens int `json:"output_tokens"`
+			} `json:"usage"`
+		}
+		if err := json.Unmarshal([]byte(line), &ev); err != nil {
+			continue
+		}
+		switch ev.Type {
+		case "response.output_text.delta":
+			if ev.Delta == "" {
+				continue
+			}
+			if !textBlockStarted {
+				textBlockStarted = true
+				FormatSSE(w, "content_block_start", sseContentBlockStart{
+					Type: "content_block_start", Index: currentBlockIndex,
+					ContentBlock: ContentBlock{Type: "text", Text: ""},
+				})
+				flusher.Flush()
+			}
+			FormatSSE(w, "content_block_delta", sseContentBlockDelta{
+				Type: "content_block_delta", Index: currentBlockIndex,
+				Delta: deltaText{Type: "text_delta", Text: ev.Delta},
+			})
+			flusher.Flush()
+		case "response.output_item.added":
+			if ev.Item != nil && ev.Item.Type == "function_call" {
+				key := ev.Item.CallID
+				if key == "" {
+					key = ev.Item.ID
+				}
+				if _, ok := toolIDs[key]; !ok {
+					toolOrder = append(toolOrder, key)
+					toolIDs[key] = "toolu_" + newID()
+				}
+				if ev.Item.Name != "" {
+					toolNames[key] = ev.Item.Name
+				}
+				// close any open text block before first tool
+				if textBlockStarted && !anyToolStarted(toolBlockStarted) {
+					FormatSSE(w, "content_block_stop", sseContentBlockStop{Type: "content_block_stop", Index: currentBlockIndex})
+					currentBlockIndex++
+					textBlockStarted = false
+				}
+			}
+		case "response.output_item.done":
+			if ev.Item != nil && ev.Item.Type == "function_call" {
+				key := ev.Item.CallID
+				if key == "" {
+					key = ev.Item.ID
+				}
+				if _, ok := toolIDs[key]; !ok {
+					toolOrder = append(toolOrder, key)
+					toolIDs[key] = "toolu_" + newID()
+				}
+				if ev.Item.Name != "" {
+					toolNames[key] = ev.Item.Name
+				}
+				toolArgs[key] = ev.Item.Arguments
+				flushToolCalls()
+			}
+		case "response.completed":
+			if ev.Response != nil && ev.Response.Usage != nil {
+				inTk = ev.Response.Usage.InputTokens
+				outTk = ev.Response.Usage.OutputTokens
+			}
+			if ev.Usage != nil {
+				if ev.Usage.InputTokens > 0 {
+					inTk = ev.Usage.InputTokens
+				}
+				if ev.Usage.OutputTokens > 0 {
+					outTk = ev.Usage.OutputTokens
+				}
+			}
+		case "error", "response.failed":
+			sawError = true
+			reqLog(r).Error("responses stream upstream error event", "payload", truncate(line, 300))
+			writeStreamError(w, flusher, "上游 GPT 响应错误: "+truncate(line, 400))
+		}
+	}
+	if err := scanner.Err(); err != nil {
+		reqLog(r).Error("responses stream read error", "error", err)
+	}
+
+	if sawError {
+		if inTk > 0 || outTk > 0 {
+			store.SetTokenUsage(r, inTk, outTk)
+		}
+		return
+	}
+	// Close out the message like the chat path does.
+	if textBlockStarted {
+		FormatSSE(w, "content_block_stop", sseContentBlockStop{Type: "content_block_stop", Index: currentBlockIndex})
+		currentBlockIndex++
+		textBlockStarted = false
+	}
+	flushToolCalls()
+	if !textBlockStarted && len(toolOrder) == 0 {
+		// Ensure at least one content block exists
+		FormatSSE(w, "content_block_start", sseContentBlockStart{
+			Type: "content_block_start", Index: currentBlockIndex,
+			ContentBlock: ContentBlock{Type: "text", Text: ""},
+		})
+		FormatSSE(w, "content_block_stop", sseContentBlockStop{Type: "content_block_stop", Index: currentBlockIndex})
+		currentBlockIndex++
+	}
+	stopReason := "end_turn"
+	if len(toolOrder) > 0 {
+		stopReason = "tool_use"
+	}
+	FormatSSE(w, "message_delta", sseMessageDelta{
+		Type:  "message_delta",
+		Delta: deltaStop{StopReason: stopReason},
+		Usage: struct {
+			OutputTokens int `json:"output_tokens"`
+		}{OutputTokens: outTk},
+	})
+	FormatSSE(w, "message_stop", sseMessageStop{Type: "message_stop"})
+	flusher.Flush()
+	if inTk > 0 || outTk > 0 {
+		store.SetTokenUsage(r, inTk, outTk)
+	}
+}
+
+func anyToolStarted(started map[string]bool) bool {
+	for _, v := range started {
+		if v {
+			return true
+		}
+	}
+	return false
+}
+
 func (h *Handler) handleNativeAnthropicStream(w http.ResponseWriter, r *http.Request, req *MessageRequest, client *joycode.Client, flusher http.Flusher, systemDefault string) {
 	body := TranslateAnthropicRequest(req, store.GetAccountDefaultModel(r), systemDefault)
 	logRequestDetails(r, "translated native anthropic request (stream)", body)
@@ -679,7 +1047,10 @@ func (h *Handler) handleNativeAnthropicNonStream(w http.ResponseWriter, r *http.
 				continue
 			}
 			switch delta.Type {
-			case "text_delta":
+			// Bedrock-style native endpoints emit the serialized delta as
+			// {"type":"text","text":...} rather than {"type":"text_delta",...};
+			// treat both the same (issue #5).
+			case "text_delta", "text":
 				current.Type = "text"
 				current.Text += delta.Text
 			case "input_json_delta":

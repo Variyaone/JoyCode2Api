@@ -55,6 +55,20 @@ export interface Stats {
   }[];
 }
 
+export interface ModelCapability {
+  id: string;
+  chat_api_model: string;
+  api: 'chat' | 'responses' | 'anthropic';
+  vision: boolean;
+  reasoning: boolean;
+  web_search: boolean;
+  image_gen: boolean;
+  max_output_tokens: number;
+  advertised_ctx: number;
+  measured_ctx: number;
+  notes?: string;
+}
+
 export interface Settings {
   [key: string]: string;
 }
@@ -213,6 +227,10 @@ export const api = {
     request<{ ok: boolean; user_id: string; nickname: string }>('/api/oauth-submit', { method: 'POST', body: JSON.stringify({ pt_key: ptKey }) }),
   getRecentErrors: (limit = 50) =>
     request<{ errors: RequestLog[]; total: number }>(`/api/errors?limit=${limit}`),
+  getModelCapabilities: () =>
+    request<{ models: ModelCapability[]; upstream_cap_ctx: number; request_body_cap: number; probed_at: string }>('/api/model-capabilities'),
+  getRecentLogs: (limit = 100) =>
+    request<{ logs: RequestLog[]; total: number }>(`/api/recent-logs?limit=${limit}`),
   getGitHubStars: () =>
     request<{ stars: number }>('/api/github-stars').then(r => r.stars),
   clearAllAccounts: () =>

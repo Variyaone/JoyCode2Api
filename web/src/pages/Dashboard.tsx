@@ -1,6 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import {
-  Card, Col, Row, Statistic, Empty, Typography, Table, Tag, Divider, Skeleton,
+  Card, Col, Row, Statistic, Empty, Typography, Table, Tag, Divider, Skeleton, Tooltip as AntTooltip,
 } from 'antd';
 import {
   ThunderboltOutlined,
@@ -12,13 +12,17 @@ import {
   DashboardOutlined,
   FireOutlined,
   RiseOutlined,
+  EyeOutlined,
+  SearchOutlined,
+  ExperimentOutlined,
+  HistoryOutlined,
 } from '@ant-design/icons';
 import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area,
 } from 'recharts';
 import { api, accountDisplayName } from '../api';
-import type { Stats, Account } from '../api';
+import type { Stats, Account, ModelCapability, RequestLog } from '../api';
 
 // Semantic palette — accent for primary series, danger for errors, info for secondary.
 // Per ui-ux-pro-max: don't rely on color alone; bars are also sorted + value-labeled.
@@ -56,17 +60,23 @@ const fmtLatency = (ms: number) => {
 const Dashboard: React.FC = () => {
   const [stats, setStats] = useState<Stats | null>(null);
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [caps, setCaps] = useState<ModelCapability[]>([]);
+  const [recentLogs, setRecentLogs] = useState<RequestLog[]>([]);
   const [loading, setLoading] = useState(true);
 
   const fetchData = async () => {
     setLoading(true);
     try {
-      const [statsData, accountsData] = await Promise.all([
+      const [statsData, accountsData, capsData, logsData] = await Promise.all([
         api.getStats(),
         api.listAccounts(),
+        api.getModelCapabilities().catch(() => null),
+        api.getRecentLogs(50).catch(() => null),
       ]);
       setStats(statsData);
       setAccounts(accountsData);
+      if (capsData) setCaps(capsData.models);
+      if (logsData) setRecentLogs(logsData.logs);
     } catch (e) {
       console.error(e);
     } finally {
@@ -469,6 +479,180 @@ const Dashboard: React.FC = () => {
           </Card>
         </Col>
       </Row>
+
+      {/* 模型能力矩阵 — 实测数据 */}
+      {caps.length > 0 && (
+        <Card
+          size="small"
+          style={{ marginTop: 16 }}
+          title={<span className="jc-section-title"><ExperimentOutlined />模型能力矩阵（2026-09-10 实测）</span>}
+          extra={<Typography.Text type="secondary" style={{ fontSize: 11 }}>上下文上限为真实探测值，非官方标称</Typography.Text>}
+        >
+          <Table
+            dataSource={caps}
+            rowKey="id"
+            size="small"
+            pagination={false}
+            scroll={{ x: 860 }}
+            columns={[
+              {
+                title: '模型',
+                dataIndex: 'id',
+                key: 'id',
+                width: 170,
+                render: (id: string) => <Typography.Text strong style={{ fontSize: 12 }}>{id}</Typography.Text>,
+              },
+              {
+                title: 'API 通道',
+                dataIndex: 'api',
+                key: 'api',
+                width: 100,
+                render: (a: string) => (
+                  <Tag color={a === 'anthropic' ? 'purple' : a === 'responses' ? 'cyan' : 'green'}>{a}</Tag>
+                ),
+              },
+              {
+                title: '多模态',
+                key: 'vision',
+                width: 80,
+                render: (_: unknown, r: ModelCapability) => r.vision
+                  ? <Tag color="blue" icon={<EyeOutlined />}>视觉</Tag>
+                  : <Typography.Text type="secondary">仅文字</Typography.Text>,
+              },
+              {
+                title: '推理',
+                key: 'reasoning',
+                width: 70,
+                render: (_: unknown, r: ModelCapability) => r.reasoning
+                  ? <Tag color="orange">✓</Tag>
+                  : <Typography.Text type="secondary">-</Typography.Text>,
+              },
+              {
+                title: '联网搜索',
+                key: 'web_search',
+                width: 90,
+                render: (_: unknown, r: ModelCapability) => r.web_search
+                  ? <Tag color="geekblue" icon={<SearchOutlined />}>内置</Tag>
+                  : <Typography.Text type="secondary">-</Typography.Text>,
+              },
+              {
+                title: '实测上下文',
+                key: 'measured_ctx',
+                width: 110,
+                render: (_: unknown, r: ModelCapability) => {
+                  const m = r.measured_ctx;
+                  const color = m >= 1000000 ? '#22C55E' : m >= 500000 ? '#F59E0B' : '#94A3B8';
+                  return (
+                    <AntTooltip title={`官方标称 ${fmt(r.advertised_ctx)}，实测可接受 ${fmt(m)}`}>
+                      <span className="jc-mono" style={{ fontWeight: 600, color, fontSize: 12 }}>
+                        {m >= 1000000 ? '1M' : fmt(m)}
+                      </span>
+                    </AntTooltip>
+                  );
+                },
+              },
+              {
+                title: '备注',
+                dataIndex: 'notes',
+                key: 'notes',
+                render: (n: string) => n
+                  ? <Typography.Text type="secondary" style={{ fontSize: 11 }}>{n}</Typography.Text>
+                  : null,
+              },
+            ]}
+          />
+        </Card>
+      )}
+
+      {/* 最近请求明细 */}
+      {recentLogs.length > 0 && (
+        <Card
+          size="small"
+          style={{ marginTop: 16 }}
+          title={<span className="jc-section-title"><HistoryOutlined />最近请求明细</span>}
+          extra={<Tag>{recentLogs.length} 条</Tag>}
+        >
+          <Table
+            dataSource={recentLogs}
+            rowKey="id"
+            size="small"
+            pagination={{ pageSize: 10, hideOnSinglePage: true, size: 'small' }}
+            columns={[
+              {
+                title: '时间',
+                dataIndex: 'created_at',
+                key: 'created_at',
+                width: 150,
+                render: (t: string) => (
+                  <Typography.Text type="secondary" style={{ fontSize: 11 }}>{t}</Typography.Text>
+                ),
+              },
+              {
+                title: '模型',
+                dataIndex: 'model',
+                key: 'model',
+                width: 150,
+                render: (m: string) => <Tag style={{ fontSize: 11 }}>{m}</Tag>,
+              },
+              {
+                title: '端点',
+                dataIndex: 'endpoint',
+                key: 'endpoint',
+                width: 140,
+                render: (e: string) => (
+                  <Typography.Text code style={{ fontSize: 10 }}>{e}</Typography.Text>
+                ),
+              },
+              {
+                title: '模式',
+                dataIndex: 'stream',
+                key: 'stream',
+                width: 70,
+                render: (s: boolean) => s ? <Tag color="blue">流式</Tag> : <Tag>非流</Tag>,
+              },
+              {
+                title: '状态',
+                dataIndex: 'status_code',
+                key: 'status_code',
+                width: 70,
+                render: (c: number) => (
+                  <Tag color={c === 200 ? 'success' : 'error'} className="jc-mono">{c}</Tag>
+                ),
+              },
+              {
+                title: '延迟',
+                dataIndex: 'latency_ms',
+                key: 'latency_ms',
+                width: 80,
+                render: (ms: number) => (
+                  <span className="jc-mono" style={{ fontSize: 11, color: ms > 30000 ? '#EF4444' : ms > 10000 ? '#F59E0B' : undefined }}>
+                    {fmtLatency(ms)}
+                  </span>
+                ),
+              },
+              {
+                title: 'Tokens (入/出)',
+                key: 'tokens',
+                width: 110,
+                render: (_: unknown, r: RequestLog) => (
+                  <span className="jc-mono" style={{ fontSize: 11 }}>
+                    {r.input_tokens > 0 ? fmt(r.input_tokens) : '-'} / {r.output_tokens > 0 ? fmt(r.output_tokens) : '-'}
+                  </span>
+                ),
+              },
+              {
+                title: '错误',
+                dataIndex: 'error_message',
+                key: 'error_message',
+                ellipsis: true,
+                render: (e: string) => e
+                  ? <Typography.Text type="danger" style={{ fontSize: 11 }}>{e}</Typography.Text>
+                  : null,
+              },
+            ]}
+          />
+        </Card>
+      )}
 
       {/* 账号详情表 */}
       {accounts.length > 0 && (
