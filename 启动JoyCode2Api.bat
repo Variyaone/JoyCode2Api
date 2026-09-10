@@ -1,17 +1,28 @@
 @echo off
 chcp 65001 >nul
-title JoyCode2Api 代理服务
+title JoyCode2Api Daemon
 
 echo ========================================================
-echo               正在启动 JoyCode2Api 代理服务...
+echo           Starting JoyCode2Api (daemon mode)
 echo ========================================================
 echo.
-echo 访问地址: http://127.0.0.1:34891
-echo API 端点: http://127.0.0.1:34891/v1
+echo URL  http://127.0.0.1:34891
+echo API  http://127.0.0.1:34891/v1
 echo.
-echo 按 Ctrl+C 可停止服务
-echo --------------------------------------------------------
 
-cd /d "%~dp0JoyCode2Api"
-JoyCode2Api.exe serve --skip-validation --tls=false
+cd /d "%~dp0"
+
+.\JoyCode2Api.exe daemon status 2>nul | findstr /C:"running" >nul
+if %errorlevel%==0 (
+    echo Daemon already running, nothing to do.
+) else (
+    .\JoyCode2Api.exe daemon start --port 34891 --skip-validation
+)
+
+echo.
+echo Runs in background. Safe to close this window.
+echo Logs    %USERPROFILE%\.joycode-proxy\logs\daemon.log
+echo Stop    JoyCode2Api.exe daemon stop
+echo Restart JoyCode2Api.exe daemon restart
+echo.
 pause
