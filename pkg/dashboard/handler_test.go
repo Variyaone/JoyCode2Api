@@ -2,6 +2,7 @@ package dashboard
 
 import (
 	"encoding/json"
+	"fmt"
 	"io/fs"
 	"net/http"
 	"net/http/httptest"
@@ -127,6 +128,155 @@ func TestHandleListAccountsEmpty(t *testing.T) {
 	}
 	if len(accounts) != 0 {
 		t.Errorf("accounts len = %d, want 0", len(accounts))
+	}
+}
+
+// seedHistoricalCredentialAccount writes only to the temporary store. The Keeper
+// created by setupTestHandler is deliberately never started or asked to validate.
+func seedHistoricalCredentialAccount(t *testing.T, s *store.Store, userID string, valid int, recorded bool) store.AccountInfo {
+	t.Helper()
+	if err := s.AddAccount(userID, "fixture-pt-"+userID, "Fixture", false, ""); err != nil {
+		t.Fatalf("seed account: %v", err)
+	}
+	if valid != -1 {
+		s.SetCredentialValid(userID, valid == 1)
+	}
+	if recorded {
+		s.UpdateCredentialRefreshedAt(userID)
+	}
+
+	accounts, err := s.ListAccounts()
+	if err != nil {
+		t.Fatalf("read fixture: %v", err)
+	}
+	for _, account := range accounts {
+		if account.UserID == userID {
+			if account.CredentialValid != valid {
+				t.Fatalf("fixture credential_valid = %d, want %d", account.CredentialValid, valid)
+			}
+			if recorded != (account.CredentialCheckedAt != "") {
+				t.Fatalf("fixture recorded time = %q, want recorded = %v", account.CredentialCheckedAt, recorded)
+			}
+			return account
+		}
+	}
+	t.Fatalf("fixture account %q missing", userID)
+	return store.AccountInfo{}
+}
+
+func TestHandleListAccountsHistoricalCredentialStatus(t *testing.T) {
+	for _, state := range []struct {
+		name  string
+		valid int
+	}{
+		{name: "unknown", valid: -1},
+		{name: "failed", valid: 0},
+		{name: "passed", valid: 1},
+	} {
+		for _, recorded := range []bool{false, true} {
+			t.Run(fmt.Sprintf("%s/recorded=%t", state.name, recorded), func(t *testing.T) {
+				h, s := setupTestHandler(t)
+				fixture := seedHistoricalCredentialAccount(t, s, "historical-user", state.valid, recorded)
+				mux := http.NewServeMux()
+				h.RegisterRoutes(mux)
+
+				// Repeated reads must preserve stored history, not turn unknown into
+				// probing/passed or infer a live result from a recorded timestamp.
+				for attempt := 0; attempt < 2; attempt++ {
+					w := httptest.NewRecorder()
+					mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/accounts", nil))
+					if w.Code != http.StatusOK {
+						t.Fatalf("list status = %d, want 200, body: %s", w.Code, w.Body.String())
+					}
+					body := decodeJSON(t, w)
+					accounts, ok := body["accounts"].([]interface{})
+					if !ok || len(accounts) != 1 {
+						t.Fatalf("accounts = %v, want one configured account", body["accounts"])
+					}
+					account, ok := accounts[0].(map[string]interface{})
+					if !ok {
+						t.Fatalf("account is not an object: %T", accounts[0])
+					}
+					if account["user_id"] != fixture.UserID {
+						t.Errorf("user_id = %v, want %q", account["user_id"], fixture.UserID)
+					}
+					if account["credential_valid"] != float64(state.valid) {
+						t.Errorf("credential_valid = %v, want stored value %d", account["credential_valid"], state.valid)
+					}
+					for field, want := range map[string]string{
+						"credential_checked_at":   fixture.CredentialCheckedAt,
+						"credential_refreshed_at": fixture.CredentialRefreshAt,
+					} {
+						got, present := account[field]
+						if want == "" {
+							if present {
+								t.Errorf("%s = %v, want omitted unknown time", field, got)
+							}
+						} else if got != want {
+							t.Errorf("%s = %v, want stored time %q", field, got, want)
+						}
+					}
+					if _, present := account["credential_error"]; present {
+						t.Error("list synthesized a credential error for a stored-only record")
+					}
+					if _, present := account["pt_key"]; present {
+						t.Error("list exposed the upstream credential")
+					}
+				}
+				if statuses := h.keeper.GetAllStatuses(); len(statuses) != 0 {
+					t.Fatalf("list created live Keeper statuses: %v", statuses)
+				}
+				stored, err := s.ListAccounts()
+				if err != nil || len(stored) != 1 {
+					t.Fatalf("reread store: accounts = %v, error = %v", stored, err)
+				}
+				if stored[0].CredentialValid != fixture.CredentialValid || stored[0].CredentialCheckedAt != fixture.CredentialCheckedAt {
+					t.Error("list mutated the stored credential history")
+				}
+			})
+		}
+	}
+}
+
+func TestHandleHealthConfiguredAccountCount(t *testing.T) {
+	for _, tc := range []struct {
+		name   string
+		states []int
+	}{
+		{name: "empty"},
+		{name: "unknown", states: []int{-1}},
+		{name: "failed", states: []int{0}},
+		{name: "passed", states: []int{1}},
+		{name: "all_failed", states: []int{0, 0}},
+		{name: "mixed_history", states: []int{-1, 0, 1}},
+	} {
+		t.Run(tc.name, func(t *testing.T) {
+			h, s := setupTestHandler(t)
+			h.Version = "historical-contract-test"
+			for i, valid := range tc.states {
+				seedHistoricalCredentialAccount(t, s, fmt.Sprintf("configured-user-%d", i), valid, valid != -1)
+			}
+			mux := http.NewServeMux()
+			h.RegisterRoutes(mux)
+			w := httptest.NewRecorder()
+			mux.ServeHTTP(w, httptest.NewRequest(http.MethodGet, "/api/health", nil))
+			if w.Code != http.StatusOK {
+				t.Fatalf("health status = %d, want 200, body: %s", w.Code, w.Body.String())
+			}
+			body := decodeJSON(t, w)
+			if body["status"] != "ok" {
+				t.Errorf("status = %v, want local service status ok regardless of credential history", body["status"])
+			}
+			if body["accounts"] != float64(len(tc.states)) {
+				t.Errorf("accounts = %v, want configured count %d, not a count of live/passed accounts", body["accounts"], len(tc.states))
+			}
+			if body["version"] != h.Version {
+				t.Errorf("version = %v, want %q", body["version"], h.Version)
+			}
+			if statuses := h.keeper.GetAllStatuses(); len(statuses) != 0 {
+				t.Fatalf("health created live Keeper statuses: %v", statuses)
+			}
+		})
 	}
 }
 

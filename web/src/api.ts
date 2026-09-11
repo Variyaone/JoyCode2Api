@@ -12,7 +12,7 @@ export interface Account {
   today_requests: number;
   total_tokens: number;
   today_tokens: number;
-  credential_valid: number; // -1=unknown, 0=expired, 1=valid
+  credential_valid: number; // -1=unknown, 0=last check failed (not necessarily expired), 1=last check passed
   credential_checked_at?: string;
   credential_refreshed_at?: string;
   credential_error?: string;
@@ -236,7 +236,7 @@ export const authApi = {
 };
 
 export const api = {
-  listAccounts: () => request<{ accounts: Account[] }>('/api/accounts').then(r => r.accounts),
+  listAccounts: (signal?: AbortSignal) => request<{ accounts: Account[] }>('/api/accounts', { signal }).then(r => r.accounts),
   addAccount: (data: { user_id: string; pt_key: string; nickname?: string; is_default?: boolean; default_model?: string }) =>
     request<{ ok: boolean }>('/api/accounts', { method: 'POST', body: JSON.stringify(data) }),
   removeAccount: (userId: string) =>
@@ -248,13 +248,13 @@ export const api = {
   listModels: () => request<{ models: ModelInfo[] }>('/api/models').then(r => r.models),
   listAccountModels: (userId: string) =>
     request<{ models: ModelInfo[] }>(`/api/accounts/${encodeURIComponent(userId)}/models`).then(r => r.models),
-  getCosts: () => request<CostSnapshot>('/api/costs'),
-  getModelBenchmarks: () => request<BenchmarkSnapshot>('/api/model-benchmarks'),
-  getStats: () => request<Stats>('/api/stats'),
+  getCosts: (signal?: AbortSignal) => request<CostSnapshot>('/api/costs', { signal }),
+  getModelBenchmarks: (signal?: AbortSignal) => request<BenchmarkSnapshot>('/api/model-benchmarks', { signal }),
+  getStats: (signal?: AbortSignal) => request<Stats>('/api/stats', { signal }),
   getSettings: () => request<{ settings: Settings }>('/api/settings').then(r => r.settings),
   updateSettings: (data: Settings) =>
     request<{ ok: boolean }>('/api/settings', { method: 'PUT', body: JSON.stringify(data) }),
-  getHealth: () => request<{ status: string; accounts: number }>('/api/health'),
+  getHealth: (signal?: AbortSignal) => request<{ status: string; accounts: number }>('/api/health', { signal }),
   updateAccountModel: (userId: string, defaultModel: string) =>
     request<{ ok: boolean }>(`/api/accounts/${encodeURIComponent(userId)}/model`, {
       method: 'PUT',
@@ -278,10 +278,10 @@ export const api = {
     request<{ ok: boolean; user_id: string; nickname: string }>('/api/oauth-submit', { method: 'POST', body: JSON.stringify({ pt_key: ptKey }) }),
   getRecentErrors: (limit = 50) =>
     request<{ errors: RequestLog[]; total: number }>(`/api/errors?limit=${limit}`),
-  getModelCapabilities: () =>
-    request<{ models: ModelCapability[]; upstream_cap_ctx: number; request_body_cap: number; probed_at: string }>('/api/model-capabilities'),
-  getRecentLogs: (limit = 100) =>
-    request<{ logs: RequestLog[]; total: number }>(`/api/recent-logs?limit=${limit}`),
+  getModelCapabilities: (signal?: AbortSignal) =>
+    request<{ models: ModelCapability[]; upstream_cap_ctx: number; request_body_cap: number; probed_at: string }>('/api/model-capabilities', { signal }),
+  getRecentLogs: (limit = 100, signal?: AbortSignal) =>
+    request<{ logs: RequestLog[]; total: number }>(`/api/recent-logs?limit=${limit}`, { signal }),
   getGitHubStars: () =>
     request<{ stars: number }>('/api/github-stars').then(r => r.stars),
   clearAllAccounts: () =>

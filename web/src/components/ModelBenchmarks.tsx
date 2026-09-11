@@ -1,7 +1,8 @@
-import { useEffect, useMemo, useState } from 'react';
+import { useMemo, useState } from 'react';
 import { Alert, Card, Empty, Input, Segmented, Space, Spin, Table, Tag, Typography } from 'antd';
 import { TrophyOutlined } from '@ant-design/icons';
-import { api } from '../api';
+import ResourceStatus from './ResourceStatus';
+import type { ResourceState } from './ResourceStatus';
 import type { BenchmarkModel, BenchmarkResult, BenchmarkSnapshot } from '../api';
 
 const mappingLabels: Record<BenchmarkModel['mapping'], string> = {
@@ -41,21 +42,13 @@ function pick(model: BenchmarkModel, sourceId: string): BenchmarkResult | undefi
 
 type Mode = 'aa' | 'multi';
 
-export default function ModelBenchmarks() {
-  const [snapshot, setSnapshot] = useState<BenchmarkSnapshot | null>(null);
+export default function ModelBenchmarks({ resource }: {
+  resource: ResourceState & { data: BenchmarkSnapshot | null; initialLoading: boolean };
+}) {
+  const { data: snapshot, initialLoading: loading, error } = resource;
   const [mode, setMode] = useState<Mode>('multi');
   const [query, setQuery] = useState('');
   const [ascending, setAscending] = useState(false);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState('');
-
-  useEffect(() => {
-    let active = true;
-    api.getModelBenchmarks().then(data => { if (active) setSnapshot(data); })
-      .catch(e => { if (active) setError(e instanceof Error ? e.message : '读取失败'); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
-  }, []);
 
   const aaSource = snapshot?.sources.find(s => s.id === 'aa');
   const benchlmSource = snapshot?.sources.find(s => s.id === 'benchlm');
@@ -92,7 +85,7 @@ export default function ModelBenchmarks() {
       title={<span className="jc-section-title"><TrophyOutlined />公开模型评测</span>}
       extra={<Segmented value={mode} onChange={v => setMode(v as Mode)} options={[{ label: '多维对比', value: 'multi' }, { label: 'AA 指数明细', value: 'aa' }]} />}>
       <Spin spinning={loading}>
-        {error && <Alert type="error" showIcon title="评测数据加载失败" description={error} style={{ marginBottom: 12 }} />}
+        <ResourceStatus label="公开评测" resource={resource} snapshot />
         {snapshot ? <>
           <Alert type="info" showIcon title="公开评测参考 ≠ JoyCode 当前表现" description={snapshot.notice} style={{ marginBottom: 16 }} />
           <Space wrap style={{ marginBottom: 12 }}>

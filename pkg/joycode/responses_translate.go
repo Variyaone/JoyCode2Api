@@ -8,9 +8,9 @@ import (
 
 // ChatToResponses converts an OpenAI chat-completions style body (model,
 // messages, tools, ...) into the Responses API format that GPT-family models
-// on the JoyCode platform require. Rules mirror the IDE's
-// normalizeMessagesForResponsesAPI:
-//   - system/developer messages are dropped; the first system text becomes "instructions"
+// on the JoyCode platform require.
+//   - the leading system/developer message becomes "instructions"; later ones
+//     remain in input order (Claude Code uses these for mid-turn user messages)
 //   - user text -> {role:user, content:[{type:input_text,text}]}
 //   - assistant text -> {role:assistant, content:[{type:output_text,text}]}
 //   - assistant tool_calls -> {type:function_call, call_id, name, arguments}
@@ -59,7 +59,7 @@ func ChatToResponses(chatBody map[string]interface{}) map[string]interface{} {
 	}
 	input := make([]interface{}, 0, len(msgs))
 	instructions := ""
-	for _, mi := range msgs {
+	for i, mi := range msgs {
 		m, ok := mi.(map[string]interface{})
 		if !ok {
 			continue
@@ -67,8 +67,13 @@ func ChatToResponses(chatBody map[string]interface{}) map[string]interface{} {
 		role, _ := m["role"].(string)
 		switch role {
 		case "system", "developer":
-			if instructions == "" {
+			if i == 0 {
 				instructions = extractStringContent(m["content"])
+			} else {
+				input = append(input, map[string]interface{}{
+					"role":    role,
+					"content": chatContentToParts(m["content"], "input_text"),
+				})
 			}
 			continue
 		case "tool":

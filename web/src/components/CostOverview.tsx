@@ -1,9 +1,10 @@
-import { useEffect, useMemo, useState } from 'react';
-import { Alert, Button, Card, Col, Row, Segmented, Statistic, Table, Typography } from 'antd';
-import { api } from '../api';
+import { useMemo } from 'react';
+import { Alert, Button, Card, Col, Row, Segmented, Skeleton, Statistic, Table, Typography } from 'antd';
 import type { CostRow, CostSnapshot } from '../api';
-
-type Currency = 'CNY' | 'USD';
+import { formatCost, money, summary } from '../utils/costs';
+import type { Currency } from '../utils/costs';
+import ResourceStatus from './ResourceStatus';
+import type { ResourceState } from './ResourceStatus';
 
 const modelLogo: Record<string, string> = {
   'GLM': '/logo-glm.svg',
@@ -22,42 +23,13 @@ function logoFor(model: string) {
   return key ? modelLogo[key] : null;
 }
 
-function summary(rows: CostRow[]) {
-  return {
-    amount: rows.reduce((n, r) => n + (r.amount_tenth_micro_usd ?? 0), 0),
-    known: rows.some(r => r.amount_tenth_micro_usd !== null && r.requests > r.missing_usage),
-    requests: rows.reduce((n, r) => n + r.requests, 0),
-    missing: rows.reduce((n, r) => n + r.missing_usage, 0),
-    unpriced: rows.reduce((n, r) => n + (r.amount_tenth_micro_usd === null ? r.requests : 0), 0),
-  };
-}
-
-function money(valueTenthMicroUsd: number, currency: Currency) {
-  const usd = valueTenthMicroUsd / 10_000_000;
-  const shown = currency === 'CNY' ? usd * 7.2 : usd;
-  if (shown > 0 && shown < 0.01) return currency === 'CNY' ? '< ¥0.01' : '< $0.01';
-  return (currency === 'CNY' ? '¥' : '$') + shown.toLocaleString('en-US', { minimumFractionDigits: 2, maximumFractionDigits: 2 });
-}
-
-export default function CostOverview() {
-  const [data, setData] = useState<CostSnapshot | null>(null);
-  const [error, setError] = useState('');
-  const [loading, setLoading] = useState(false);
-  const [currency, setCurrency] = useState<Currency>(() => localStorage.getItem('jc_cost_currency') === 'USD' ? 'USD' : 'CNY');
-  const load = async () => {
-    setLoading(true); setError('');
-    try { setData(await api.getCosts()); }
-    catch (e) { setError(e instanceof Error ? e.message : '加载失败'); }
-    finally { setLoading(false); }
-  };
-  useEffect(() => { void load(); }, []);
-  useEffect(() => { localStorage.setItem('jc_cost_currency', currency); }, [currency]);
-
-  const fmt = (rows: CostRow[], fallback: string) => {
-    const s = summary(rows);
-    if (s.known) return money(s.amount, currency);
-    return s.requests === 0 ? (currency === 'CNY' ? '¥0.00（无记录）' : '$0.00（无记录）') : fallback;
-  };
+export default function CostOverview({ resource, currency, onCurrencyChange }: {
+  resource: ResourceState & { data: CostSnapshot | null; initialLoading: boolean };
+  currency: Currency;
+  onCurrencyChange: (value: Currency) => void;
+}) {
+  const { data } = resource;
+  const fmt = (rows: CostRow[], fallback: string) => formatCost(rows, currency, fallback);
 
   const all = summary(data?.rows ?? []);
   const todayRows = useMemo(() => data?.rows.filter(r => r.day === data.today) ?? [], [data]);
@@ -70,9 +42,10 @@ export default function CostOverview() {
 
   const currencyCell = { align: 'right' as const };
 
-  return <Card size="small" style={{ marginTop: 16 }} title="用量费用估算"
-    extra={<Segmented value={currency} onChange={v => setCurrency(v as Currency)} options={[{ label: '人民币 ¥', value: 'CNY' }, { label: '美元 $', value: 'USD' }]} />}>
-    {error && <Alert type="error" showIcon title="费用加载失败（已有数据可能过期）" description={error} />}
+  return <Card size="small" className="jc-cost-overview" title="用量费用估算"
+    extra={<Segmented aria-label="费用币种" value={currency} onChange={v => onCurrencyChange(v as Currency)} options={[{ label: '人民币 ¥', value: 'CNY' }, { label: '美元 $', value: 'USD' }]} />}>
+    <ResourceStatus label="费用" resource={resource} />
+    {resource.initialLoading && <Skeleton active paragraph={{ rows: 4 }} />}
     {data && <>
       <Alert type="warning" showIcon title={`参考费用，不是实际扣款或公司账单（按 1 USD ≈ 7.2 CNY 估算汇率换算）`} description={data.notice} style={{ marginBottom: 16 }} />
       <Row gutter={[16, 16]}>
@@ -107,7 +80,7 @@ export default function CostOverview() {
           { title: '说明', dataIndex: 'note' },
         ]} />
       </details>
-      <Button onClick={load} loading={loading} style={{ marginTop: 12 }}>刷新费用</Button>
     </>}
+    <Button onClick={() => void resource.refresh()} loading={resource.refreshing} style={{ marginTop: 12 }}>刷新费用</Button>
   </Card>;
 }

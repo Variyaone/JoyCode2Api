@@ -5,6 +5,8 @@ import {
   TeamOutlined,
   SettingOutlined,
   CheckCircleOutlined,
+  QuestionCircleOutlined,
+  WarningOutlined,
   GithubOutlined,
   StarFilled,
   LogoutOutlined,
@@ -13,6 +15,14 @@ import { useNavigate, useLocation, Outlet } from 'react-router-dom';
 import UsageNotice from '../components/UsageNotice';
 import useDocumentTitle from '../hooks/useDocumentTitle';
 import { api, clearToken } from '../api';
+import { useRefreshableResource } from '../hooks/useRefreshableResource';
+import type { ResourceState } from '../components/ResourceStatus';
+
+export interface DashboardOutletContext {
+  autoRefresh: boolean;
+  setAutoRefresh: (value: boolean) => void;
+  health: ResourceState;
+}
 
 const { Header, Sider, Content } = Layout;
 const { Text } = Typography;
@@ -32,15 +42,16 @@ const MainLayout: React.FC = () => {
   const { token } = theme.useToken();
   useDocumentTitle();
 
-  const [healthStatus, setHealthStatus] = useState<'ok' | 'error'>('ok');
-  const [accountCount, setAccountCount] = useState(0);
+  const [autoRefresh, setAutoRefresh] = useState(() => localStorage.getItem('jc_auto_refresh') !== 'false');
+  const health = useRefreshableResource(async signal => {
+    const result = await api.getHealth(signal);
+    if (result.status !== 'ok') throw new Error('代理状态异常');
+    return result;
+  }, { autoRefresh });
   const [stars, setStars] = useState<number | null>(null);
 
+  useEffect(() => { localStorage.setItem('jc_auto_refresh', String(autoRefresh)); }, [autoRefresh]);
   useEffect(() => {
-    api.getHealth().then((h) => {
-      setHealthStatus(h.status === 'ok' ? 'ok' : 'error');
-      setAccountCount(h.accounts);
-    }).catch(() => setHealthStatus('error'));
     api.getGitHubStars().then((s) => { if (s > 0) setStars(s); }).catch(() => {});
   }, []);
 
@@ -85,12 +96,17 @@ const MainLayout: React.FC = () => {
         />
       </Sider>
       <Layout style={{ minWidth: 0 }}>
-        <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', height: 'auto', minHeight: 56 }}>
-          <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
-            <Tag color={healthStatus === 'ok' ? 'success' : 'error'} icon={<CheckCircleOutlined />}>
-              {healthStatus === 'ok' ? '服务正常' : '服务异常'}
-            </Tag>
-            <Text type="secondary" style={{ fontSize: 13 }}>{accountCount} 个账号在线</Text>
+        <Header className="jc-main-header">
+          <div className="jc-health-summary">
+            <Tooltip title="仅表示上次检查时本地代理 HTTP 可达，不代表上游模型可用。">
+              <Tag color={health.error ? 'error' : !health.data || health.stale ? 'default' : 'success'}
+                icon={health.error ? <WarningOutlined /> : !health.data || health.stale ? <QuestionCircleOutlined /> : <CheckCircleOutlined />}>
+                {health.error ? '状态获取失败' : !health.data ? '正在读取状态' : health.stale ? '代理状态待更新' : '代理可连接'}
+              </Tag>
+            </Tooltip>
+            <Text type="secondary" style={{ fontSize: 13 }}>
+              {health.data ? `已配置 ${health.data.accounts} 个账号${health.error || health.stale ? '（上次记录）' : ''}` : '账号数量待读取'}
+            </Text>
           </div>
           <div style={{ display: 'flex', alignItems: 'center', gap: 16, flexShrink: 0 }}>
             <Tooltip title="退出登录">
@@ -124,7 +140,7 @@ const MainLayout: React.FC = () => {
           </div>
         </Header>
         <Content>
-          <Outlet />
+          <Outlet context={{ autoRefresh, setAutoRefresh, health } satisfies DashboardOutletContext} />
           <UsageNotice />
         </Content>
       </Layout>
