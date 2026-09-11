@@ -12,7 +12,7 @@ type Rate struct {
 	Note   string `json:"note"`
 }
 
-const Version = "public-base-2026-09-11-v2"
+const Version = "public-base-2026-09-11-v3"
 const CollectedAt = "2026-09-11"
 
 func n(v int64) *int64 { return &v }
@@ -38,7 +38,7 @@ var Rates = []Rate{
 	{"GLM-5.2-jcloud", cny(8), cny(28), "智谱官网 GLM-5.2", "https://docs.bigmodel.cn/cn/guide/start/pricing", "按同版本 GLM-5.2 官网价参考；非 jcloud 实际账单"},
 	{"Kimi-K3", cny(20), cny(100), "Kimi 官网", "https://platform.kimi.com/docs/pricing/chat-k3", "输入未命中缓存价；缓存命中 ¥2 未计"},
 	{"Kimi-K3-jcloud", cny(20), cny(100), "Kimi 官网", "https://platform.kimi.com/docs/pricing/chat-k3", "按 Kimi 官网价参考；非 jcloud 实际账单"},
-	{"DeepSeek-V4-Pro", n(66), n(198), "DeepSeek 官网", "https://api-docs.deepseek.com/quick_start/pricing/", "0813 版 peak 价；off-peak 半价未分桶，按 peak 估算"},
+	{"DeepSeek-V4-Pro", n(66), n(198), "DeepSeek 官网", "https://api-docs.deepseek.com/quick_start/pricing/", "V4-Pro-0813 版 peak 价；off-peak 半价未分桶，按 peak 估算"},
 	{"MiniMax-M3", n(3), n(12), "Artificial Analysis", "https://artificialanalysis.ai/models/minimax-m3", "公开基础价参考"},
 	{"Doubao-Seed-2.0-pro", cny(48), cny(240), "火山方舟", "https://www.volcengine.com/docs/82379/1544106", "取输入长度 (32,128] 阶梯价；日志无长度分桶"},
 	{"JoyAI-Code-1.5", nil, nil, "", "", "本次未取得可信匹配价格"},

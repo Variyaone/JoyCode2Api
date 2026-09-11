@@ -51,9 +51,8 @@
     {"id":"Kimi-K3-jcloud", "mapping":"deployment_reference", "note":"只有公开基础模型参考分，不能直接当成 jcloud 部署成绩。", "results":[
       {"source_id":"aa","public_model":"Kimi K3","variant":"max","score":44,"url":"https://artificialanalysis.ai/models/kimi-k3","published_at":null,"footnote":"部署配置对应关系尚未核实。"}
     ]},
-    {"id":"DeepSeek-V4-Pro", "mapping":"version_ambiguous", "note":"公开榜单区分 0424 和 0813 版本，JoyCode 名称没有日期。两条都展示为参考，不擅自选择更高分。", "results":[
-      {"source_id":"aa","public_model":"DeepSeek V4 Pro 0813","variant":"max","score":36,"url":"https://artificialanalysis.ai/models/deepseek-v4-pro","published_at":null,"footnote":"需确认 JoyCode 是否部署 0813 版本。"},
-      {"source_id":"aa","public_model":"DeepSeek V4 Pro (0424)","variant":"max","score":31,"url":"https://artificialanalysis.ai/models/deepseek-v4-pro-0424","published_at":null,"footnote":"需确认 JoyCode 是否部署 0424 版本。"},
+    {"id":"DeepSeek-V4-Pro", "mapping":"name_match", "note":"JoyCode 部署为 0813 版；采用 DeepSeek V4 Pro 0813 的公开成绩。", "results":[
+      {"source_id":"aa","public_model":"DeepSeek V4 Pro 0813","variant":"max","score":36,"url":"https://artificialanalysis.ai/models/deepseek-v4-pro","published_at":null,"footnote":""},
       {"source_id":"benchlm","public_model":"DeepSeek V4 Pro 0813","variant":"ESTIMATED","score":66.38,"url":"https://benchlm.ai/","published_at":"2026-09-10","footnote":"BenchLM 估算档：AG 57 / CO 52 / RE 60 / MA 80；上下文 1M；token/s 69。"}
     ]},
     {"id":"Claude-Opus-4.8", "mapping":"unverified", "note":"AA 当前榜单未取得精确匹配成绩；不以 Opus 5 或 4.6 分数代替。", "results":[

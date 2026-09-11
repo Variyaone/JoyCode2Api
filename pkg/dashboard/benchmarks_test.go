@@ -72,8 +72,8 @@ func TestBenchmarkSnapshot(t *testing.T) {
 				t.Fatal("invalid AA snapshot score")
 			}
 		}
-		if model.ID == "DeepSeek-V4-Pro" && (model.Mapping != "version_ambiguous" || len(model.Results) != 3) {
-			t.Fatal("DeepSeek versions must stay separate")
+		if model.ID == "DeepSeek-V4-Pro" && (model.Mapping != "name_match" || len(model.Results) != 2) {
+			t.Fatal("DeepSeek 0813 must be the single matched version")
 		}
 		if (model.ID == "Kimi-K3-jcloud" || model.ID == "GLM-5.2-jcloud") && model.Mapping != "deployment_reference" {
 			t.Fatal("jcloud must not claim identical deployment")
