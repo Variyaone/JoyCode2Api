@@ -51,7 +51,7 @@ func runStream(t *testing.T, bodyFn func() io.ReadCloser) string {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
-	reqBody := `{"model":"GLM-5.1","stream":true,"max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
+	reqBody := `{"model":"GLM-5.3","stream":true,"max_tokens":64,"messages":[{"role":"user","content":"hi"}]}`
 	req := httptest.NewRequest("POST", "/v1/messages", strings.NewReader(reqBody))
 	req.Header.Set("Content-Type", "application/json")
 	w := httptest.NewRecorder()

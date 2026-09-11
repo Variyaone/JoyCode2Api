@@ -237,7 +237,7 @@ func TestHandleUpdateModel(t *testing.T) {
 	s.AddAccount("key1", "pt1", "user1", true, "")
 
 	req := makeRequest(t, "PUT", "/api/accounts/key1/model", map[string]interface{}{
-		"default_model": "GLM-5.1",
+		"default_model": "GLM-5.3",
 	})
 	w := httptest.NewRecorder()
 	mux.ServeHTTP(w, req)
@@ -247,7 +247,7 @@ func TestHandleUpdateModel(t *testing.T) {
 	}
 
 	a, _ := s.GetAccount("key1")
-	if a.DefaultModel != "GLM-5.1" {
+	if a.DefaultModel != "GLM-5.3" {
 		t.Errorf("model = %q, want GLM-5.1", a.DefaultModel)
 	}
 }
@@ -308,7 +308,7 @@ func TestHandleStatsWithLogs(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	s.AddAccount("key1", "pt1", "user1", true, "")
-	s.LogRequest("key1", "JoyAI-Code", "/v1/chat", true, 200, 500, "", 0, 0)
+	s.LogRequest("key1", "JoyAI-Code-1.5", "/v1/chat", true, 200, 500, "", 0, 0)
 
 	req := httptest.NewRequest("GET", "/api/stats", nil)
 	w := httptest.NewRecorder()
@@ -423,8 +423,8 @@ func TestHandleAccountStats(t *testing.T) {
 	h.RegisterRoutes(mux)
 
 	s.AddAccount("key1", "pt1", "user1", true, "")
-	s.LogRequest("key1", "JoyAI-Code", "/v1/chat", true, 200, 500, "", 0, 0)
-	s.LogRequest("key1", "GLM-5.1", "/v1/msg", false, 200, 300, "", 0, 0)
+	s.LogRequest("key1", "JoyAI-Code-1.5", "/v1/chat", true, 200, 500, "", 0, 0)
+	s.LogRequest("key1", "GLM-5.3", "/v1/msg", false, 200, 300, "", 0, 0)
 
 	req := httptest.NewRequest("GET", "/api/accounts/key1/stats", nil)
 	w := httptest.NewRecorder()

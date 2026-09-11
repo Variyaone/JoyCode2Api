@@ -102,6 +102,7 @@ func IsNativeAnthropicModel(model string) bool {
 // endpoint's internal model ids (chatApiModel from joycode_modelList —
 // the Claude family requires the -hq suffix, the bare label returns 6002).
 var nativeAnthropicAPINames = map[string]string{
+	"Claude-Opus-5":     "Claude-Opus-5-hq",
 	"Claude-Opus-4.8":   "Claude-Opus-4.8-hq",
 	"Claude-Opus-4.7":   "Claude-Opus-4.7-hq",
 	"Claude-Sonnet-4.6": "Claude-Sonnet-4.6-hq",
@@ -116,7 +117,7 @@ func resolveNativeAnthropicModel(model string, accountDefault string, systemDefa
 		}
 		return resolved
 	}
-	return "Claude-Opus-4.8-hq"
+	return "Claude-Opus-5-hq"
 }
 
 // convertToolsToOpenAI converts Anthropic-format tools to OpenAI function-calling format.

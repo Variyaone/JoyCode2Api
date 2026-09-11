@@ -2,6 +2,7 @@ import React, { useEffect, useState } from 'react';
 import { Form, Input, Button, message, Typography, Tooltip } from 'antd';
 import { LockOutlined, UserOutlined, QuestionCircleOutlined, GithubOutlined, StarFilled } from '@ant-design/icons';
 import { useNavigate, Link } from 'react-router-dom';
+import UsageNotice from '../components/UsageNotice';
 import { authApi, setToken, api } from '../api';
 
 const { Title, Text } = Typography;
@@ -91,6 +92,7 @@ const LoginPage: React.FC = () => {
             </Button>
           </Form.Item>
         </Form>
+        <UsageNotice />
         <div style={{ textAlign: 'center', marginTop: 16 }}>
           <Link
             to="/forgot-password"

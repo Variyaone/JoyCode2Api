@@ -17,10 +17,10 @@ func TestResolveModel(t *testing.T) {
 		systemDefault  string
 		expected       string
 	}{
-		{"known joycode model passes through", "GLM-4.7", "", "", "GLM-4.7"},
+		{"known joycode model passes through", "GLM-5.2-jcloud", "", "", "GLM-5.2-jcloud"},
 		{"unknown model falls back to default", "claude-sonnet-4-20250514", "", "", joycode.DefaultModel},
-		{"account default overrides for unknown model", "claude-opus-4", "Kimi-K2.6", "GLM-5.1", "Kimi-K2.6"},
-		{"system default used when no account default", "unknown-model", "", "GLM-5.1", "GLM-5.1"},
+		{"account default overrides for unknown model", "claude-opus-4", "Kimi-K3", "GLM-5.3", "Kimi-K3"},
+		{"system default used when no account default", "unknown-model", "", "GLM-5.3", "GLM-5.3"},
 	}
 	for _, tt := range tests {
 		got := resolveModel(tt.model, tt.accountDefault, tt.systemDefault)

@@ -10,6 +10,7 @@ import {
   LogoutOutlined,
 } from '@ant-design/icons';
 import { useNavigate, useLocation, Outlet } from 'react-router-dom';
+import UsageNotice from '../components/UsageNotice';
 import useDocumentTitle from '../hooks/useDocumentTitle';
 import { api, clearToken } from '../api';
 
@@ -51,6 +52,8 @@ const MainLayout: React.FC = () => {
     <Layout style={{ minHeight: '100vh' }}>
       <Sider
         collapsible
+        breakpoint="lg"
+        collapsedWidth={48}
         collapsed={collapsed}
         onCollapse={(val) => { setCollapsed(val); localStorage.setItem(COLLAPSED_KEY, String(val)); }}
         width={220}
@@ -81,8 +84,8 @@ const MainLayout: React.FC = () => {
           onClick={({ key }) => navigate(key)}
         />
       </Sider>
-      <Layout>
-        <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between' }}>
+      <Layout style={{ minWidth: 0 }}>
+        <Header style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', flexWrap: 'wrap', height: 'auto', minHeight: 56 }}>
           <div style={{ display: 'flex', alignItems: 'center', gap: 12, minWidth: 0 }}>
             <Tag color={healthStatus === 'ok' ? 'success' : 'error'} icon={<CheckCircleOutlined />}>
               {healthStatus === 'ok' ? '服务正常' : '服务异常'}
@@ -122,6 +125,7 @@ const MainLayout: React.FC = () => {
         </Header>
         <Content>
           <Outlet />
+          <UsageNotice />
         </Content>
       </Layout>
     </Layout>

@@ -67,6 +67,8 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/qr-login/status", h.handleQRLoginStatus)
 	mux.HandleFunc("/api/models", h.handleModels)
 	mux.HandleFunc("/api/model-capabilities", h.handleModelCapabilities)
+	mux.HandleFunc("/api/model-benchmarks", h.handleModelBenchmarks)
+	mux.HandleFunc("/api/costs", h.handleCosts)
 	mux.HandleFunc("/api/recent-logs", h.handleRecentLogs)
 	mux.HandleFunc("/api/stats", h.handleStats)
 	mux.HandleFunc("/api/settings", h.handleSettings)
@@ -1347,25 +1349,25 @@ type ModelCapabilityRow struct {
 	Notes         string `json:"notes,omitempty"`
 }
 
-// modelCapabilities is the measured matrix. MeasuredCtx values come from
-// binary-search recall probes: send N tokens of code filler with a secret
-// code word at the start, ask for the word at the end; the largest N that
-// still recalls it is the real context window (upstream labels claim 200k
-// for everything, but most models actually accept ~1M).
+// modelCapabilities records historical probes, not public benchmark scores.
+// MeasuredCtx is a successful input-token observation, not a maximum. Zero
+// means no verified observation for this deployment/version.
 var modelCapabilities = []ModelCapabilityRow{
-	{"GLM-5.3", "GLM-5.3", "chat", false, true, false, false, 64000, 200000, 1000000, "1M 实测可用（990k 召回成功）"},
-	{"GLM-5.2-jcloud", "GLM-5.2-jcloud", "chat", false, true, false, false, 64000, 200000, 1000000, ""},
-	{"Kimi-K3", "Kimi-K3", "chat", true, true, false, false, 64000, 200000, 1000000, "vision 走 image_url 格式"},
-	{"Kimi-K3-jcloud", "Kimi-K3-jcloud", "chat", true, true, false, false, 64000, 200000, 1000000, ""},
-	{"DeepSeek-V4-Pro", "DeepSeek-V4-Pro", "chat", false, true, false, false, 64000, 200000, 1000000, ""},
-	{"MiniMax-M3", "MiniMax-M3", "chat", false, true, false, false, 64000, 200000, 936000, "936k 以上 400"},
-	{"Doubao-Seed-2.0-pro", "Doubao-Seed-2.0-pro", "chat", false, false, false, false, 64000, 200000, 220000, "220k 实测上限"},
-	{"JoyAI-Code-1.5", "JoyAI-Code-1.5", "chat", false, false, false, false, 64000, 200000, 180000, "180k 实测上限"},
-	{"GPT-5.6 Sol", "GPT-5.6 Sol", "responses", true, true, true, false, 64000, 200000, 910000, "内置 web_search 工具；image_gen 需网关专有 header 不可用"},
-	{"Claude-Opus-4.8", "Claude-Opus-4.8-hq", "anthropic", true, false, false, false, 64000, 200000, 1000000, "Bedrock 1M 上限，991k 召回成功"},
-	{"Claude-Opus-4.7", "Claude-Opus-4.7-hq", "anthropic", true, false, false, false, 64000, 200000, 1000000, ""},
-	{"Claude-Sonnet-4.6", "Claude-Sonnet-4.6-hq", "anthropic", true, false, false, false, 64000, 200000, 1000000, ""},
-	{"Claude-Opus-4.6", "Claude-Opus-4.6-hq", "anthropic", true, false, false, false, 64000, 200000, 1000000, ""},
+	{"GLM-5.3", "GLM-5.3", "chat", false, true, false, false, 64000, 200000, 990034, "2026-09-10：开头码字召回成功；非完整长上下文基准"},
+	{"GLM-5.2-jcloud", "GLM-5.2-jcloud", "chat", false, true, false, false, 64000, 200000, 0, "jcloud 部署未单独验证，不继承 GLM-5.3 上限"},
+	{"Kimi-K3", "Kimi-K3", "chat", true, true, false, false, 64000, 200000, 990117, "2026-09-10：码字召回成功；图片请求接受不等于视觉准确率已验证"},
+	{"Kimi-K3-jcloud", "Kimi-K3-jcloud", "chat", true, true, false, false, 64000, 200000, 0, "上游目录标注 vision；jcloud 部署待单独验证"},
+	{"DeepSeek-V4-Pro", "DeepSeek-V4-Pro", "chat", false, true, false, false, 64000, 200000, 900028, "2026-09-10：码字召回成功；部署日期版本未确定"},
+	{"MiniMax-M3", "MiniMax-M3", "chat", false, true, false, false, 64000, 200000, 936200, "历史请求返回 usage；最终召回未核实。目录标注 vision，视觉测试未通过不代表无能力"},
+	{"Doubao-Seed-2.0-pro", "Doubao-Seed-2.0-pro", "chat", false, false, false, false, 64000, 200000, 220071, "2026-09-10：码字召回成功；视觉能力待有效样本复测"},
+	{"JoyAI-Code-1.5", "JoyAI-Code-1.5", "chat", false, false, false, false, 64000, 200000, 162051, "2026-09-10：码字召回成功；不是 180k 精确上限"},
+	{"GPT-6 Astra", "GPT-6 Astra", "responses", true, true, false, false, 64000, 200000, 0, "仅基础文本调用验证；目录标注 vision；长上下文和搜索待复测"},
+	{"GPT-5.6 Sol", "GPT-5.6 Sol", "responses", true, true, true, false, 64000, 200000, 900029, "2026-09-10：原生 Responses 码字召回和 web_search 测试；不是代理内置搜索已接通的保证"},
+	{"Claude-Opus-5", "Claude-Opus-5-hq", "anthropic", true, false, false, false, 64000, 200000, 0, "仅基础文本调用验证；代理关闭 thinking 不等于模型无推理能力"},
+	{"Claude-Opus-4.8", "Claude-Opus-4.8-hq", "anthropic", true, false, false, false, 64000, 200000, 991245, "2026-09-10：码字召回成功；后端错误明确 1,000,000 token 限制；不外推其他型号"},
+	{"Claude-Opus-4.7", "Claude-Opus-4.7-hq", "anthropic", true, false, false, false, 64000, 200000, 0, "当前目录未列出；历史配置保留，不保证可用"},
+	{"Claude-Sonnet-4.6", "Claude-Sonnet-4.6-hq", "anthropic", true, false, false, false, 64000, 200000, 0, "当前目录未列出；历史配置保留，不保证可用"},
+	{"Claude-Opus-4.6", "Claude-Opus-4.6-hq", "anthropic", true, false, false, false, 64000, 200000, 0, "当前目录未列出；历史配置保留，不保证可用"},
 }
 
 func (h *Handler) handleModelCapabilities(w http.ResponseWriter, r *http.Request) {

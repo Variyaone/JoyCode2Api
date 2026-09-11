@@ -57,23 +57,16 @@ var colorEndpoints = map[string]colorEndpoint{
 }
 
 var Models = []string{
-	"JoyAI-Code",
+	"JoyAI-Code-1.5",
+	"Claude-Opus-5",
 	"Claude-Opus-4.8",
-	"Claude-Opus-4.7",
-	"Claude-Sonnet-4.6",
-	"Claude-Opus-4.6",
 	"GLM-5.3",
 	"GLM-5.2-jcloud",
-	"GLM-5.1",
-	"GLM-5",
-	"GLM-4.7",
 	"Kimi-K3",
 	"Kimi-K3-jcloud",
-	"Kimi-K2.6",
-	"Kimi-K2.5",
 	"DeepSeek-V4-Pro",
 	"MiniMax-M3",
-	"MiniMax-M2.7",
+	"GPT-6 Astra",
 	"GPT-5.6 Sol",
 	"Doubao-Seed-2.0-pro",
 }

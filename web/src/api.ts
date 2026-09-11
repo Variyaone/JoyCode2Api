@@ -69,6 +69,55 @@ export interface ModelCapability {
   notes?: string;
 }
 
+export interface BenchmarkResult {
+  source_id: string;
+  public_model: string;
+  variant: string;
+  score: number | null;
+  url: string;
+  published_at: string | null;
+  footnote: string;
+}
+
+export interface BenchmarkModel {
+  id: string;
+  mapping: 'name_match' | 'deployment_reference' | 'version_ambiguous' | 'unverified';
+  note: string;
+  results: BenchmarkResult[];
+}
+
+export interface BenchmarkSnapshot {
+  schema_version: number;
+  collected_at: string;
+  notice: string;
+  sources: {
+    id: string;
+    name: string;
+    metric: string;
+    version: string;
+    unit: string;
+    higher_is_better: boolean;
+    url: string;
+    methodology_url: string;
+    status: string;
+    description: string;
+  }[];
+  models: BenchmarkModel[];
+}
+
+export interface CostRow {
+  day: string; model: string; price_version: string; requests: number;
+  input_tokens: number; output_tokens: number; missing_usage: number;
+  input_rate: number | null; output_rate: number | null;
+  amount_tenth_micro_usd: number | null;
+}
+export interface CostSnapshot {
+  currency: string; price_version: string; collected_at: string;
+  today: string; timezone: string; coverage_start: string; notice: string;
+  rates: { model: string; input_tenth_micro_usd: number | null; output_tenth_micro_usd: number | null; source: string; url: string; note: string }[];
+  rows: CostRow[];
+}
+
 export interface Settings {
   [key: string]: string;
 }
@@ -199,6 +248,8 @@ export const api = {
   listModels: () => request<{ models: ModelInfo[] }>('/api/models').then(r => r.models),
   listAccountModels: (userId: string) =>
     request<{ models: ModelInfo[] }>(`/api/accounts/${encodeURIComponent(userId)}/models`).then(r => r.models),
+  getCosts: () => request<CostSnapshot>('/api/costs'),
+  getModelBenchmarks: () => request<BenchmarkSnapshot>('/api/model-benchmarks'),
   getStats: () => request<Stats>('/api/stats'),
   getSettings: () => request<{ settings: Settings }>('/api/settings').then(r => r.settings),
   updateSettings: (data: Settings) =>

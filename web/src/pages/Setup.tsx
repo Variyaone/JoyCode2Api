@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { Form, Input, Button, message, Typography, Progress } from 'antd';
 import { LockOutlined, CheckCircleOutlined } from '@ant-design/icons';
 import { useNavigate } from 'react-router-dom';
+import UsageNotice from '../components/UsageNotice';
 import { authApi, setToken } from '../api';
 
 const { Title, Text } = Typography;
@@ -96,6 +97,7 @@ const SetupPage: React.FC = () => {
             </Button>
           </Form.Item>
         </Form>
+        <UsageNotice />
       </div>
     </div>
   );

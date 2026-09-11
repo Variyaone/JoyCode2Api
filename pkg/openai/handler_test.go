@@ -164,8 +164,8 @@ func TestModels_Get(t *testing.T) {
 	modelListResp := map[string]interface{}{
 		"data": []interface{}{
 			map[string]interface{}{
-				"label":    "JoyAI-Code",
-				"modelId":  "JoyAI-Code",
+				"label":    "JoyAI-Code-1.5",
+				"modelId":  "JoyAI-Code-1.5",
 				"features": []string{},
 			},
 		},
@@ -302,7 +302,7 @@ func TestChat_ValidNonStream(t *testing.T) {
 	})
 	defer cleanup()
 
-	body := `{"model":"JoyAI-Code","messages":[{"role":"user","content":"hi"}],"stream":false}`
+	body := `{"model":"JoyAI-Code-1.5","messages":[{"role":"user","content":"hi"}],"stream":false}`
 	resp, err := http.Post(
 		srv.URL+"/v1/chat/completions",
 		"application/json",
@@ -320,7 +320,7 @@ func TestChat_ValidNonStream(t *testing.T) {
 	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
 		t.Fatal(err)
 	}
-	if result["model"] != "JoyAI-Code" {
+	if result["model"] != "JoyAI-Code-1.5" {
 		t.Errorf("expected model=JoyAI-Code, got %v", result["model"])
 	}
 	if result["object"] != "chat.completion" {

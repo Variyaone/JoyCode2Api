@@ -35,25 +35,18 @@ import { api, accountDisplayName } from '../api';
 import type { Account } from '../api';
 
 const BUILTIN_MODELS = [
-  { label: 'JoyAI-Code（推荐）', value: 'JoyAI-Code' },
+  { label: 'JoyAI-Code-1.5（推荐）', value: 'JoyAI-Code-1.5' },
+  { label: 'Claude-Opus-5', value: 'Claude-Opus-5' },
+  { label: 'Claude-Opus-4.8', value: 'Claude-Opus-4.8' },
   { label: 'GLM-5.3', value: 'GLM-5.3' },
   { label: 'GLM-5.2-jcloud', value: 'GLM-5.2-jcloud' },
-  { label: 'GLM-5.1', value: 'GLM-5.1' },
-  { label: 'GLM-5', value: 'GLM-5' },
-  { label: 'GLM-4.7', value: 'GLM-4.7' },
   { label: 'Kimi-K3', value: 'Kimi-K3' },
   { label: 'Kimi-K3-jcloud', value: 'Kimi-K3-jcloud' },
-  { label: 'Kimi-K2.6', value: 'Kimi-K2.6' },
-  { label: 'Kimi-K2.5', value: 'Kimi-K2.5' },
   { label: 'DeepSeek-V4-Pro', value: 'DeepSeek-V4-Pro' },
   { label: 'MiniMax-M3', value: 'MiniMax-M3' },
-  { label: 'MiniMax-M2.7', value: 'MiniMax-M2.7' },
+  { label: 'GPT-6 Astra', value: 'GPT-6 Astra' },
   { label: 'GPT-5.6 Sol', value: 'GPT-5.6 Sol' },
   { label: 'Doubao-Seed-2.0-pro', value: 'Doubao-Seed-2.0-pro' },
-  { label: 'Claude-Opus-4.8', value: 'Claude-Opus-4.8' },
-  { label: 'Claude-Opus-4.7', value: 'Claude-Opus-4.7' },
-  { label: 'Claude-Sonnet-4.6', value: 'Claude-Sonnet-4.6' },
-  { label: 'Claude-Opus-4.6', value: 'Claude-Opus-4.6' },
 ];
 
 const isClaudeModel = (model?: string) => Boolean(model && model.toLowerCase().startsWith('claude'));
@@ -75,7 +68,7 @@ const fmtTokens = (n: number): string => {
   return String(n);
 };
 
-const claudeCodeCmd = (apiKey: string, model = 'GLM-5.1') => [
+const claudeCodeCmd = (apiKey: string, model = 'GLM-5.3') => [
   `API_TIMEOUT_MS=6000000 \\`,
   `CLAUDE_CODE_MAX_RETRIES=1000000 \\`,
   `NODE_TLS_REJECT_UNAUTHORIZED=0 \\`,
@@ -86,7 +79,7 @@ const claudeCodeCmd = (apiKey: string, model = 'GLM-5.1') => [
   `claude --dangerously-skip-permissions`,
 ].join('\n');
 
-const codexCmd = (apiKey: string, model = 'GLM-5.1') => [
+const codexCmd = (apiKey: string, model = 'GLM-5.3') => [
   `OPENAI_BASE_URL=${getBaseURL()}/v1 \\`,
   `OPENAI_API_KEY="${apiKey}" \\`,
   `OPENAI_MODEL=${model} \\`,

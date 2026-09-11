@@ -13,11 +13,11 @@ import (
 // Test 1: Basic request with model and messages
 func TestTranslateRequest_Basic(t *testing.T) {
 	req := &ChatRequest{
-		Model:    "JoyAI-Code",
+		Model:    "JoyAI-Code-1.5",
 		Messages: json.RawMessage(`[{"role":"user","content":"hello"}]`),
 	}
 	body := TranslateRequest(req)
-	if body["model"] != "JoyAI-Code" {
+	if body["model"] != "JoyAI-Code-1.5" {
 		t.Errorf("expected model=JoyAI-Code, got %v", body["model"])
 	}
 	msgs, ok := body["messages"].([]interface{})
@@ -36,7 +36,7 @@ func TestTranslateRequest_Basic(t *testing.T) {
 // Test 2: With max_tokens
 func TestTranslateRequest_MaxTokens(t *testing.T) {
 	req := &ChatRequest{
-		Model:     "JoyAI-Code",
+		Model:     "JoyAI-Code-1.5",
 		MaxTokens: 1024,
 	}
 	body := TranslateRequest(req)
@@ -49,7 +49,7 @@ func TestTranslateRequest_MaxTokens(t *testing.T) {
 func TestTranslateRequest_Temperature(t *testing.T) {
 	temp := 0.7
 	req := &ChatRequest{
-		Model:       "JoyAI-Code",
+		Model:       "JoyAI-Code-1.5",
 		Temperature: &temp,
 	}
 	body := TranslateRequest(req)
@@ -62,7 +62,7 @@ func TestTranslateRequest_Temperature(t *testing.T) {
 func TestTranslateRequest_TopP(t *testing.T) {
 	topP := 0.9
 	req := &ChatRequest{
-		Model: "JoyAI-Code",
+		Model: "JoyAI-Code-1.5",
 		TopP:  &topP,
 	}
 	body := TranslateRequest(req)
@@ -74,7 +74,7 @@ func TestTranslateRequest_TopP(t *testing.T) {
 // Test 5: With tools
 func TestTranslateRequest_Tools(t *testing.T) {
 	req := &ChatRequest{
-		Model: "JoyAI-Code",
+		Model: "JoyAI-Code-1.5",
 		Tools: json.RawMessage(`[{"type":"function","function":{"name":"test"}}]`),
 	}
 	body := TranslateRequest(req)
@@ -94,7 +94,7 @@ func TestTranslateRequest_Tools(t *testing.T) {
 // Test 6: With tool_choice
 func TestTranslateRequest_ToolChoice(t *testing.T) {
 	req := &ChatRequest{
-		Model:      "JoyAI-Code",
+		Model:      "JoyAI-Code-1.5",
 		ToolChoice: json.RawMessage(`"auto"`),
 	}
 	body := TranslateRequest(req)
@@ -111,7 +111,7 @@ func TestTranslateRequest_ToolChoice(t *testing.T) {
 // Test 7: With stop sequences
 func TestTranslateRequest_Stop(t *testing.T) {
 	req := &ChatRequest{
-		Model: "JoyAI-Code",
+		Model: "JoyAI-Code-1.5",
 		Stop:  json.RawMessage(`["STOP","END"]`),
 	}
 	body := TranslateRequest(req)
@@ -123,7 +123,7 @@ func TestTranslateRequest_Stop(t *testing.T) {
 // Test 8: With thinking (for reasoning model)
 func TestTranslateRequest_Thinking(t *testing.T) {
 	req := &ChatRequest{
-		Model:    "GLM-5.1",
+		Model:    "GLM-5.3",
 		Thinking: json.RawMessage(`{"type":"enabled","budget_tokens":5000}`),
 	}
 	body := TranslateRequest(req)
@@ -159,7 +159,7 @@ func TestTranslateRequest_Empty(t *testing.T) {
 // Test 10: Stream flag preserved
 func TestTranslateRequest_StreamFlag(t *testing.T) {
 	req := &ChatRequest{
-		Model:  "JoyAI-Code",
+		Model:  "JoyAI-Code-1.5",
 		Stream: true,
 	}
 	body := TranslateRequest(req)
@@ -168,7 +168,7 @@ func TestTranslateRequest_StreamFlag(t *testing.T) {
 	}
 
 	req2 := &ChatRequest{
-		Model:  "JoyAI-Code",
+		Model:  "JoyAI-Code-1.5",
 		Stream: false,
 	}
 	body2 := TranslateRequest(req2)
@@ -185,8 +185,8 @@ func TestTranslateResponse_Normal(t *testing.T) {
 		"choices": []interface{}{"choice1"},
 		"usage":   map[string]interface{}{"total_tokens": 10},
 	}
-	resp := TranslateResponse(jcResp, "JoyAI-Code")
-	if resp["model"] != "JoyAI-Code" {
+	resp := TranslateResponse(jcResp, "JoyAI-Code-1.5")
+	if resp["model"] != "JoyAI-Code-1.5" {
 		t.Errorf("expected model=JoyAI-Code, got %v", resp["model"])
 	}
 	if resp["choices"] == nil {
@@ -203,7 +203,7 @@ func TestTranslateResponse_Normal(t *testing.T) {
 // Test 12: Verify id has "chatcmpl-" prefix
 func TestTranslateResponse_IDPrefix(t *testing.T) {
 	jcResp := map[string]interface{}{}
-	resp := TranslateResponse(jcResp, "JoyAI-Code")
+	resp := TranslateResponse(jcResp, "JoyAI-Code-1.5")
 	id, ok := resp["id"].(string)
 	if !ok {
 		t.Fatal("id is not a string")
@@ -216,7 +216,7 @@ func TestTranslateResponse_IDPrefix(t *testing.T) {
 // Test 13: Verify object is "chat.completion"
 func TestTranslateResponse_Object(t *testing.T) {
 	jcResp := map[string]interface{}{}
-	resp := TranslateResponse(jcResp, "JoyAI-Code")
+	resp := TranslateResponse(jcResp, "JoyAI-Code-1.5")
 	if resp["object"] != "chat.completion" {
 		t.Errorf("expected object=chat.completion, got %v", resp["object"])
 	}
@@ -227,7 +227,7 @@ func TestTranslateResponse_Object(t *testing.T) {
 // Test 14: Single model
 func TestTranslateModels_Single(t *testing.T) {
 	models := []joycode.ModelInfo{
-		{Label: "JoyAI-Code", ModelID: "JoyAI-Code"},
+		{Label: "JoyAI-Code-1.5", ModelID: "JoyAI-Code-1.5"},
 	}
 	result := TranslateModels(models)
 	if result["object"] != "list" {
@@ -237,7 +237,7 @@ func TestTranslateModels_Single(t *testing.T) {
 	if !ok || len(data) != 1 {
 		t.Fatalf("expected 1 model entry, got %v", result["data"])
 	}
-	if data[0]["id"] != "JoyAI-Code" {
+	if data[0]["id"] != "JoyAI-Code-1.5" {
 		t.Errorf("expected id=JoyAI-Code, got %v", data[0]["id"])
 	}
 }
@@ -245,9 +245,9 @@ func TestTranslateModels_Single(t *testing.T) {
 // Test 15: Multiple models
 func TestTranslateModels_Multiple(t *testing.T) {
 	models := []joycode.ModelInfo{
-		{Label: "JoyAI-Code", ModelID: "JoyAI-Code"},
-		{Label: "GLM-5.1", ModelID: "GLM-5.1"},
-		{Label: "Kimi-K2.6", ModelID: "Kimi-K2.6"},
+		{Label: "JoyAI-Code-1.5", ModelID: "JoyAI-Code-1.5"},
+		{Label: "GLM-5.3", ModelID: "GLM-5.3"},
+		{Label: "Kimi-K3", ModelID: "Kimi-K3"},
 	}
 	result := TranslateModels(models)
 	data, ok := result["data"].([]map[string]interface{})
@@ -283,7 +283,7 @@ func TestTranslateModels_UsesLabel(t *testing.T) {
 // Test 18: Model with capabilities includes them
 func TestTranslateModels_Capabilities(t *testing.T) {
 	models := []joycode.ModelInfo{
-		{Label: "JoyAI-Code", ModelID: "JoyAI-Code"},
+		{Label: "JoyAI-Code-1.5", ModelID: "JoyAI-Code-1.5"},
 	}
 	result := TranslateModels(models)
 	data := result["data"].([]map[string]interface{})
@@ -317,7 +317,7 @@ func TestTranslateModels_Empty(t *testing.T) {
 // Test 20: Valid chunk gets model and id added
 func TestTranslateStreamChunk_Valid(t *testing.T) {
 	data := `{"choices":[{"delta":{"content":"hello"}}]}`
-	result := TranslateStreamChunk(data, "JoyAI-Code")
+	result := TranslateStreamChunk(data, "JoyAI-Code-1.5")
 	if !strings.HasPrefix(result, "data: ") {
 		t.Errorf("expected data prefix, got %s", result)
 	}
@@ -331,7 +331,7 @@ func TestTranslateStreamChunk_Valid(t *testing.T) {
 	if err := json.Unmarshal([]byte(payload), &chunk); err != nil {
 		t.Fatalf("invalid JSON in chunk: %s", payload)
 	}
-	if chunk["model"] != "JoyAI-Code" {
+	if chunk["model"] != "JoyAI-Code-1.5" {
 		t.Errorf("expected model=JoyAI-Code, got %v", chunk["model"])
 	}
 	id, _ := chunk["id"].(string)
@@ -342,7 +342,7 @@ func TestTranslateStreamChunk_Valid(t *testing.T) {
 
 // Test 21: [DONE] passes through
 func TestTranslateStreamChunk_Done(t *testing.T) {
-	result := TranslateStreamChunk("[DONE]", "JoyAI-Code")
+	result := TranslateStreamChunk("[DONE]", "JoyAI-Code-1.5")
 	if result != "data: [DONE]\n\n" {
 		t.Errorf("expected 'data: [DONE]\\n\\n', got %q", result)
 	}
@@ -351,7 +351,7 @@ func TestTranslateStreamChunk_Done(t *testing.T) {
 // Test 22: Invalid JSON passes through as-is
 func TestTranslateStreamChunk_InvalidJSON(t *testing.T) {
 	invalidData := "not json at all"
-	result := TranslateStreamChunk(invalidData, "JoyAI-Code")
+	result := TranslateStreamChunk(invalidData, "JoyAI-Code-1.5")
 	expected := "data: not json at all\n\n"
 	if result != expected {
 		t.Errorf("expected %q, got %q", expected, result)
@@ -361,7 +361,7 @@ func TestTranslateStreamChunk_InvalidJSON(t *testing.T) {
 // Test 23: Verify object is "chat.completion.chunk"
 func TestTranslateStreamChunk_Object(t *testing.T) {
 	data := `{"choices":[{"delta":{"content":"x"}}]}`
-	result := TranslateStreamChunk(data, "JoyAI-Code")
+	result := TranslateStreamChunk(data, "JoyAI-Code-1.5")
 	payload := strings.TrimPrefix(result, "data: ")
 	payload = strings.TrimSuffix(payload, "\n\n")
 	var chunk map[string]interface{}
@@ -385,16 +385,16 @@ func TestResolveModel_Empty(t *testing.T) {
 
 // Test 25: Non-empty returns input
 func TestResolveModel_NonEmpty(t *testing.T) {
-	result := ResolveModel("GLM-5.1", "", "")
-	if result != "GLM-5.1" {
+	result := ResolveModel("GLM-5.3", "", "")
+	if result != "GLM-5.3" {
 		t.Errorf("expected GLM-5.1, got %s", result)
 	}
 }
 
 // Test 26: Specific model name preserved
 func TestResolveModel_SpecificName(t *testing.T) {
-	result := ResolveModel("Kimi-K2.6", "", "")
-	if result != "Kimi-K2.6" {
+	result := ResolveModel("Kimi-K3", "", "")
+	if result != "Kimi-K3" {
 		t.Errorf("expected Kimi-K2.6, got %s", result)
 	}
 }
@@ -403,14 +403,14 @@ func TestResolveModel_SpecificName(t *testing.T) {
 
 // Test 27: ReasoningModels map has expected entries
 func TestReasoningModels(t *testing.T) {
-	expected := []string{"GLM-5.1", "Kimi-K2.6", "MiniMax-M2.7"}
+	expected := []string{"GLM-5.3", "Kimi-K3", "MiniMax-M3"}
 	for _, m := range expected {
 		if !ReasoningModels[m] {
 			t.Errorf("expected %s to be a reasoning model", m)
 		}
 	}
 	// Verify non-reasoning models are absent
-	nonReasoning := []string{"JoyAI-Code", "GLM-5", "GLM-4.7", "Kimi-K2.5"}
+	nonReasoning := []string{"JoyAI-Code-1.5", "Doubao-Seed-2.0-pro", "Claude-Opus-4.8"}
 	for _, m := range nonReasoning {
 		if ReasoningModels[m] {
 			t.Errorf("expected %s to NOT be a reasoning model", m)
@@ -421,8 +421,8 @@ func TestReasoningModels(t *testing.T) {
 // Test 28: ModelCapabilities has expected entries for all known models
 func TestModelCapabilities(t *testing.T) {
 	expected := []string{
-		"JoyAI-Code", "MiniMax-M2.7", "Kimi-K2.5",
-		"Kimi-K2.6", "GLM-5.1", "GLM-5", "GLM-4.7", "Doubao-Seed-2.0-pro",
+		"JoyAI-Code-1.5", "MiniMax-M3", "Kimi-K3-jcloud",
+		"Kimi-K3", "GLM-5.3", "GLM-5.3", "GLM-5.2-jcloud", "Doubao-Seed-2.0-pro",
 	}
 	for _, m := range expected {
 		caps, ok := ModelCapabilities[m]
@@ -438,10 +438,10 @@ func TestModelCapabilities(t *testing.T) {
 		}
 	}
 	// Spot-check specific capabilities
-	if !ModelCapabilities["MiniMax-M2.7"].Reasoning {
+	if !ModelCapabilities["MiniMax-M3"].Reasoning {
 		t.Error("expected MiniMax-M2.7 to have Reasoning=true")
 	}
-	if !ModelCapabilities["Kimi-K2.5"].Vision {
+	if !ModelCapabilities["Kimi-K3-jcloud"].Vision {
 		t.Error("expected Kimi-K2.5 to have Vision=true")
 	}
 }

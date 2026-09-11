@@ -6,9 +6,9 @@
 
 让 Claude Code、Cursor、Codex 直接用上 JoyCode 背后的模型
 
-`JoyAI-Code` · `Claude-Opus-4.8` · `Claude-Opus-4.7` · `Claude-Sonnet-4.6` · `Claude-Opus-4.6` · `GLM-5.3` · `GLM-5.2-jcloud` · `GLM-5.1` · `Kimi-K3` · `Kimi-K3-jcloud` · `Kimi-K2.6` · `DeepSeek-V4-Pro` · `MiniMax-M3` · `Doubao-Seed-2.0-pro` · `GPT-5.6 Sol`
+`JoyAI-Code-1.5` · `Claude-Opus-5` · `Claude-Opus-4.8` · `GLM-5.3` · `GLM-5.2-jcloud` · `Kimi-K3` · `Kimi-K3-jcloud` · `DeepSeek-V4-Pro` · `MiniMax-M3` · `Doubao-Seed-2.0-pro` · `GPT-6 Astra` · `GPT-5.6 Sol`
 
-20260910：修复 GPT-5.6 Sol（新增 Responses API 通道）、修复 Claude 系列经代理无输出（-hq 模型名映射）；Dashboard 新增模型能力矩阵与请求明细监控。实测 GLM/Kimi/DeepSeek/Claude 均支持约 1M 真实上下文。
+20260911：新增 GPT-6 Astra / Claude-Opus-5 支持、公开 Benchmark 来源与档位对比、模型公开单价和按日/累计费用估算，以及信息安全使用声明。公开评分、历史通道探测及费用估算分别展示，不代表 JoyCode 实际部署能力或账单。
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react)](https://react.dev/)
@@ -36,7 +36,7 @@ Codex     ───┘    (协议翻译层)
 
 工具调用（tool use）、流式输出（SSE）、上下文截断全部完整翻译，使用体验和原生 API 一致。
 
-> ⚠️ **免责声明**：本项目仅供**个人学习和技术研究**使用。禁止用于商业转售、API 中转服务（**中转站属于违法行为**）、大规模薅号或任何违法违规活动。因不当使用造成的一切后果由使用者自行承担，与项目作者无关。本项目不是 JoyCode 官方产品。
+> ⚠️ **使用声明与责任限制**：本项目仅供大语言模型（LLM）的学习、技术研究及经授权的测试使用，非 JoyCode 官方产品。使用者应遵守适用法律法规、服务提供方条款及所在组织的信息安全、保密和数据处理规定。未经合法授权及必要审批，不得上传、传输或披露公司机密、个人信息、访问凭据及其他敏感数据；严禁用于违法违规活动或侵犯第三方权益。软件按“现状”提供，不对可用性、准确性或特定用途适用性作出保证。在适用法律允许的范围内，使用者应对其使用行为及后果承担责任，作者及贡献者不对因使用或无法使用本项目而产生的损失承担责任；本声明不排除法律规定不得排除或限制的责任。
 
 ---
 
@@ -293,30 +293,59 @@ docker compose up -d --build
 
 ---
 
-## 模型能力矩阵（2026-09-10 实测）
+## 公开 Benchmark（2026-09-11 采集）
 
-以下数据来自对 JoyCode 上游的真实探测（隐藏码字召回法测真实上下文、base64 图片测多模态、内置工具测联网搜索）：
+Dashboard 的「公开模型评测」区提供 **Artificial Analysis Intelligence Index v4.3** 的公开分数、评测档位、版本说明和原站链接，支持筛选、排序与展开对比。分数是综合指数，不是百分制正确率，也不是本地 JoyCode 通道得分。
 
-| 模型 | API 通道 | 多模态 | 推理 | 联网搜索 | 官方标称 | 实测上下文 |
-|------|---------|--------|------|---------|---------|-----------|
-| GLM-5.3 / GLM-5.2-jcloud | chat | ❌ | ✓ | ❌ | 200k | **1M** |
-| Kimi-K3 / Kimi-K3-jcloud | chat | ✓ | ✓ | ❌ | 200k | **1M** |
-| DeepSeek-V4-Pro | chat | ❌ | ✓ | ❌ | 200k | **1M** |
-| MiniMax-M3 | chat | ❌ | ✓ | ❌ | 200k | ~936k |
-| Doubao-Seed-2.0-pro | chat | ❌ | ❌ | ❌ | 200k | ~220k |
-| JoyAI-Code-1.5 | chat | ❌ | ❌ | ❌ | 200k | ~180k |
-| GPT-5.6 Sol | responses | ✓ | ✓ | ✓ 内置工具 | 200k | ~910k |
-| Claude-Opus-4.8 / 4.7 / 4.6、Claude-Sonnet-4.6 | anthropic | ✓ | ❌ | ❌ | 200k | **1M**（Bedrock 硬上限） |
+| 公开型号 | 已收录最高档 | AA v4.3（原站整数精度） |
+|---|---|---:|
+| GPT-6 Astra | max / xhigh | 53 |
+| Claude Opus 5 | max | 51 |
+| GPT-5.6 Sol | max | 47 |
+| GLM-5.3 | max | 45 |
+| Kimi K3 | max | 44 |
+| MiniMax-M3 | 原站未单列 | 30 |
 
-说明：
+- 来源：[AA 原站榜单](https://artificialanalysis.ai/leaderboards/models)、[指标方法](https://artificialanalysis.ai/methodology/intelligence-benchmarking)。v4.3 包含 10 项评测；版本改变后不能直接比较旧指数。
+- 最高档不是相同计算预算；例如 GPT-6 Astra medium=50、low=46。代理不自动开启公开 max 档。Claude 原生路径关闭 thinking 不代表模型没有推理能力。
+- `-jcloud` 只展示基础模型参考；DeepSeek V4 Pro 的 0424/0813 成绩分别记录，JoyCode 日期版本未确定前不参加主排名。缺失分数不是 0。
+- [SWE-bench 官方](https://www.swebench.com/)当前核查的是 Verified/Bash Only（500 题，mini-SWE-agent），未取得这些新型号的精确匹配成绩；不同 agent/scaffold、版本或赛道不得混排。
+- [Arena](https://arena.ai/leaderboard)本次访问受限，未取得数值，不表示模型未上榜。尚未核实的厂商自报成绩不纳入独立榜单。
+- 数据是随程序发布的快照，不会在加载 Dashboard 时联系外部网站或发送凭据。维护 `pkg/dashboard/data/benchmarks.json`：逐条保留型号、档位、指标版本、URL、脚注、采集时间；发布日期未知用 null，确认后重新构建。新增指标时单独建来源/赛道，不能相加成自定义总分。
 
-- **GPT-5.6 Sol** 只接受 OpenAI **Responses API**（`responses_completions` 网关），旧 Chat Completions 通道对其返回错误；本代理已内置自动分流，调用方无感知。
-- **Claude 系列**走上游原生 Anthropic 端点，内部模型名需 `-hq` 后缀（如 `Claude-Opus-4.8-hq`），代理已自动映射。
-- **联网搜索**：GPT-5.6 Sol 支持 Responses 内置 `web_search` 工具（请求 `tools: [{"type":"web_search"}]`）；所有模型均可配合独立 `/v1/web-search` 端点。
-- **图片/视频生成**：上游无此能力（GPT 的 `image_generation` 工具需要网关专有 header，无法激活）。
-- 上游请求体硬上限 **5MB**（约 100 万英文 token）。
+## 通道能力记录（历史探测，不等于 Benchmark）
+
+上游目录通常标称 200k；历史大输入请求只证明某次调用成功，不证明全任务质量或精确上限。以下数字取自当时返回的 usage，不用字符估算代替 token：
+
+| 通道型号 | 历史成功输入 tokens | 证据局限 |
+|---|---:|---|
+| GLM-5.3 | 990,034 | 开头码字召回；不是完整长上下文基准 |
+| Kimi-K3 | 990,117 | 同上；不外推 jcloud |
+| DeepSeek-V4-Pro | 900,028 | 部署日期版本未确认 |
+| MiniMax-M3 | 936,200 | 返回 usage；最终召回未核实 |
+| Doubao-Seed-2.0-pro | 220,071 | 不能认定 220k 为精确上限 |
+| JoyAI-Code-1.5 | 162,051 | 不再声称 180k 已验证 |
+| GPT-5.6 Sol | 900,029 | 大于此值的失败不确定精确边界 |
+| Claude-Opus-4.8-hq | 991,245 | 该通道错误明确 1,000,000 token 限制；不外推全系列 |
+| GPT-6 Astra / Claude-Opus-5 / jcloud 部署 | — | 未单独验证长上下文 |
+
+- 图像请求接受不等于识图准确率通过。目录 vision 标签、通道实测、公开多模态评分需要分开看；一次 400 不能断言模型不支持视觉。
+- GPT-5.6 Sol 的原生 Responses `web_search` 测试成功，不保证代理翻译层已暴露此内置工具。独立 `/v1/web-search` 是另一条接口。
+- 图像生成测试返回缺少部署配置；视频生成未发现可验证入口，不能据此断言服务器绝对不存在此能力。
+- 网关曾明确返回请求体上限 **5,242,880 bytes**；字节限制不等于 token 限制。
 
 ---
+
+## 模型单价与费用估算
+
+Dashboard 展示今日、累计、近30日每日以及按模型的 **USD 公开标价估算**，不是 JoyCode 实际扣款、企业账单或费用承诺。
+
+- 输入与输出单价单位均为 **USD / 1M tokens**，附价格来源和采集日期（2026-09-11）。Claude 使用[官方标准价](https://platform.claude.com/docs/en/about-claude/pricing)，其余已核实型号引用 Artificial Analysis 各模型详情页。未知型号或 jcloud/日期不明确部署留空，不视为免费。
+- 公式：`输入 tokens × 输入单价 / 1,000,000 + 输出 tokens × 输出单价 / 1,000,000`。内部按整数十分之一微美元累计，不对每条小请求提前舍入。
+- 仅使用日志已记录的输入/输出数。缓存优惠、缓存写入、区域/长上下文/服务层级附加费、搜索/生图等工具费未计入；缺失 usage 单列计数，估算既不是实际账单的上界，也不是下界。
+- `cost_daily` 按本地日期、模型和价格版本保留汇总及单价快照，无提示词、凭据或用户身份。请求记录与费用汇总同事务；日志清理不删除费用汇总。
+- 首次升级仅从尚存日志回填，使用升级时参考价格，已清理日志无法恢复。累计范围以页面“统计起点”为准，不称完整终身账单。新的价格版本只影响新记录，旧快照不重写。
+- 维护 `pkg/pricing/pricing.go` 时须更新价格版本、采集日期及来源；价格单位精度为 0.1 微美元/token（即 $0.10/MTok）。更精细价格需先升级定点精度，禁止四舍五入成免费。
 
 ## API 参考
 
@@ -336,7 +365,9 @@ docker compose up -d --build
 
 | 方法 | 路径 | 说明 |
 |------|------|------|
-| `GET` | `/api/model-capabilities` | 模型能力矩阵（实测上下文/多模态/搜索等） |
+| `GET` | `/api/costs` | 模型参考单价、日期/模型/价格版本费用账本及覆盖范围 |
+| `GET` | `/api/model-benchmarks` | 公开评分快照（来源、指标版本、档位及对应关系） |
+| `GET` | `/api/model-capabilities` | 通道能力历史记录（已验证输入量不是精确上限） |
 | `GET` | `/api/recent-logs?limit=N` | 最近请求明细（模型/端点/状态/延迟/Token） |
 | `GET` | `/api/errors?limit=N` | 最近错误请求 |
 | `GET` | `/api/stats` | 用量统计（今日/累计/按模型/按账号/24h 时序） |

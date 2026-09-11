@@ -21,6 +21,8 @@ import {
   BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer,
   AreaChart, Area,
 } from 'recharts';
+import CostOverview from '../components/CostOverview';
+import ModelBenchmarks from '../components/ModelBenchmarks';
 import { api, accountDisplayName } from '../api';
 import type { Stats, Account, ModelCapability, RequestLog } from '../api';
 
@@ -213,6 +215,8 @@ const Dashboard: React.FC = () => {
           </div>
         </div>
       </div>
+
+      <CostOverview />
 
       {/* 24h 时序图表 */}
       <Row gutter={[16, 16]}>
@@ -480,13 +484,15 @@ const Dashboard: React.FC = () => {
         </Col>
       </Row>
 
-      {/* 模型能力矩阵 — 实测数据 */}
+      <ModelBenchmarks />
+
+      {/* 模型能力记录：历史探测不等于公开 Benchmark */}
       {caps.length > 0 && (
         <Card
           size="small"
           style={{ marginTop: 16 }}
-          title={<span className="jc-section-title"><ExperimentOutlined />模型能力矩阵（2026-09-10 实测）</span>}
-          extra={<Typography.Text type="secondary" style={{ fontSize: 11 }}>上下文上限为真实探测值，非官方标称</Typography.Text>}
+          title={<span className="jc-section-title"><ExperimentOutlined />通道能力记录（历史探测）</span>}
+          extra={<Typography.Text type="secondary" style={{ fontSize: 11 }}>非公开评分；空值表示未验证，成功输入量不是完整能力上限</Typography.Text>}
         >
           <Table
             dataSource={caps}
@@ -516,8 +522,8 @@ const Dashboard: React.FC = () => {
                 key: 'vision',
                 width: 80,
                 render: (_: unknown, r: ModelCapability) => r.vision
-                  ? <Tag color="blue" icon={<EyeOutlined />}>视觉</Tag>
-                  : <Typography.Text type="secondary">仅文字</Typography.Text>,
+                  ? <Tag color="blue" icon={<EyeOutlined />}>视觉记录</Tag>
+                  : <Typography.Text type="secondary">未确认</Typography.Text>,
               },
               {
                 title: '推理',
@@ -536,16 +542,16 @@ const Dashboard: React.FC = () => {
                   : <Typography.Text type="secondary">-</Typography.Text>,
               },
               {
-                title: '实测上下文',
+                title: '已验证输入量',
                 key: 'measured_ctx',
-                width: 110,
+                width: 130,
                 render: (_: unknown, r: ModelCapability) => {
                   const m = r.measured_ctx;
-                  const color = m >= 1000000 ? '#22C55E' : m >= 500000 ? '#F59E0B' : '#94A3B8';
+                  if (!m) return <Typography.Text type="secondary">待验证</Typography.Text>;
                   return (
-                    <AntTooltip title={`官方标称 ${fmt(r.advertised_ctx)}，实测可接受 ${fmt(m)}`}>
-                      <span className="jc-mono" style={{ fontWeight: 600, color, fontSize: 12 }}>
-                        {m >= 1000000 ? '1M' : fmt(m)}
+                    <AntTooltip title={`上游目录标称 ${fmt(r.advertised_ctx)}；历史成功请求输入量 ${m.toLocaleString()} tokens，不代表完整上下文能力上限。`}>
+                      <span className="jc-mono" style={{ fontWeight: 600, fontSize: 12 }}>
+                        ≥ {fmt(m)}
                       </span>
                     </AntTooltip>
                   );

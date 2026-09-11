@@ -111,7 +111,7 @@ func TestDecryptTooShort(t *testing.T) {
 func TestAddAndListAccounts(t *testing.T) {
 	s := openTestStore(t)
 
-	err := s.AddAccount("key1", "pt1", "user1", true, "JoyAI-Code")
+	err := s.AddAccount("key1", "pt1", "user1", true, "JoyAI-Code-1.5")
 	if err != nil {
 		t.Fatalf("add: %v", err)
 	}
@@ -132,8 +132,8 @@ func TestAddAndListAccounts(t *testing.T) {
 	if !accounts[0].IsDefault {
 		t.Error("expected IsDefault = true")
 	}
-	if accounts[0].DefaultModel != "JoyAI-Code" {
-		t.Errorf("DefaultModel = %q, want %q", accounts[0].DefaultModel, "JoyAI-Code")
+	if accounts[0].DefaultModel != "JoyAI-Code-1.5" {
+		t.Errorf("DefaultModel = %q, want %q", accounts[0].DefaultModel, "JoyAI-Code-1.5")
 	}
 }
 
@@ -153,7 +153,7 @@ func TestAddMultipleAccounts(t *testing.T) {
 	s := openTestStore(t)
 
 	s.AddAccount("key1", "pt1", "user1", true, "")
-	s.AddAccount("key2", "pt2", "user2", false, "GLM-5.1")
+	s.AddAccount("key2", "pt2", "user2", false, "GLM-5.3")
 
 	accounts, _ := s.ListAccounts()
 	if len(accounts) != 2 {
@@ -176,7 +176,7 @@ func TestAddAccountOverwrites(t *testing.T) {
 	s := openTestStore(t)
 
 	s.AddAccount("key1", "pt1", "user1", true, "")
-	s.AddAccount("key1", "pt1-updated", "user1-new", false, "GLM-5.1")
+	s.AddAccount("key1", "pt1-updated", "user1-new", false, "GLM-5.3")
 
 	accounts, _ := s.ListAccounts()
 	if len(accounts) != 1 {
@@ -192,7 +192,7 @@ func TestAddAccountOverwrites(t *testing.T) {
 func TestGetAccount(t *testing.T) {
 	s := openTestStore(t)
 
-	s.AddAccount("key1", "secret-pt-key", "user1", true, "JoyAI-Code")
+	s.AddAccount("key1", "secret-pt-key", "user1", true, "JoyAI-Code-1.5")
 
 	a, err := s.GetAccount("key1")
 	if err != nil {
@@ -264,12 +264,12 @@ func TestSetDefault(t *testing.T) {
 func TestUpdateAccountModel(t *testing.T) {
 	s := openTestStore(t)
 
-	s.AddAccount("key1", "pt1", "user1", true, "JoyAI-Code")
-	s.UpdateAccountModel("key1", "GLM-5.1")
+	s.AddAccount("key1", "pt1", "user1", true, "JoyAI-Code-1.5")
+	s.UpdateAccountModel("key1", "GLM-5.3")
 
 	a, _ := s.GetAccount("key1")
-	if a.DefaultModel != "GLM-5.1" {
-		t.Errorf("DefaultModel = %q, want %q", a.DefaultModel, "GLM-5.1")
+	if a.DefaultModel != "GLM-5.3" {
+		t.Errorf("DefaultModel = %q, want %q", a.DefaultModel, "GLM-5.3")
 	}
 }
 
@@ -277,7 +277,7 @@ func TestGetDefaultAccount(t *testing.T) {
 	s := openTestStore(t)
 
 	s.AddAccount("key1", "pt1", "user1", false, "")
-	s.AddAccount("key2", "pt2", "user2", true, "JoyAI-Code")
+	s.AddAccount("key2", "pt2", "user2", true, "JoyAI-Code-1.5")
 
 	a, err := s.GetDefaultAccount()
 	if err != nil {
@@ -366,9 +366,9 @@ func TestSetSettingOverwrite(t *testing.T) {
 func TestLogRequestAndGetStats(t *testing.T) {
 	s := openTestStore(t)
 
-	s.LogRequest("key1", "JoyAI-Code", "/v1/chat/completions", true, 200, 500, "", 0, 0)
-	s.LogRequest("key1", "GLM-5.1", "/v1/chat/completions", false, 200, 300, "", 0, 0)
-	s.LogRequest("key2", "JoyAI-Code", "/v1/messages", true, 200, 400, "", 0, 0)
+	s.LogRequest("key1", "JoyAI-Code-1.5", "/v1/chat/completions", true, 200, 500, "", 0, 0)
+	s.LogRequest("key1", "GLM-5.3", "/v1/chat/completions", false, 200, 300, "", 0, 0)
+	s.LogRequest("key2", "JoyAI-Code-1.5", "/v1/messages", true, 200, 400, "", 0, 0)
 
 	stats, err := s.GetStats()
 	if err != nil {
@@ -403,9 +403,9 @@ func TestGetStatsEmpty(t *testing.T) {
 func TestGetAccountStats(t *testing.T) {
 	s := openTestStore(t)
 
-	s.LogRequest("key1", "JoyAI-Code", "/v1/chat/completions", true, 200, 500, "", 0, 0)
-	s.LogRequest("key1", "GLM-5.1", "/v1/messages", false, 200, 300, "", 0, 0)
-	s.LogRequest("key1", "JoyAI-Code", "/v1/chat/completions", true, 500, 100, "", 0, 0)
+	s.LogRequest("key1", "JoyAI-Code-1.5", "/v1/chat/completions", true, 200, 500, "", 0, 0)
+	s.LogRequest("key1", "GLM-5.3", "/v1/messages", false, 200, 300, "", 0, 0)
+	s.LogRequest("key1", "JoyAI-Code-1.5", "/v1/chat/completions", true, 500, 100, "", 0, 0)
 
 	stats, err := s.GetAccountStats("key1")
 	if err != nil {
@@ -505,7 +505,7 @@ func TestEncryptionKeyReused(t *testing.T) {
 // the UTC offset (visible on non-UTC servers; a no-op exactly at UTC).
 func TestGetHourlyStatsUsesLocalHour(t *testing.T) {
 	s := openTestStore(t)
-	if err := s.LogRequest("k1", "GLM-5.1", "/v1/chat", true, 200, 100, "", 1, 2); err != nil {
+	if err := s.LogRequest("k1", "GLM-5.3", "/v1/chat", true, 200, 100, "", 1, 2); err != nil {
 		t.Fatalf("log request: %v", err)
 	}
 

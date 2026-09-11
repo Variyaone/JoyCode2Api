@@ -2,6 +2,21 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-09-11
+
+### Added
+- 公开模型单价及今日/累计/逐日费用估算（USD），明确未知价格和缺失用量；版本化定点单价、幂等历史回填、独立汇总账本不随日志清理丢失。
+- `/api/costs` JWT 接口和费用面板；统一登录、初始化、主布局和 README 的学习研究、信息安全及责任限制声明。
+- GPT-6 Astra、Claude-Opus-5 名称与 Claude `-hq` 映射支持、下拉选项同步（基础文本验证）。
+- Dashboard「公开模型评测」：AA Intelligence Index v4.3 分数、多推理档位、模型筛选、同指标排序、来源链接及采集日期。
+- `/api/model-benchmarks`：随程序嵌入的 JSON 公开评分快照，沿用 Dashboard JWT 鉴权，不自动访问公网。
+- SWE-bench 官方榜单与 Arena 来源状态说明；缺失/访问受限记录不填分数。jcloud 基础模型参考、DeepSeek 日期版本与名称对应记录分开处理。
+
+### Corrected
+- 公开最高档分数不是 JoyCode 当前部署的成绩，不与本地能力测试混排。
+- 撤回旧文档中全系列“均已实测 1M”、GPT 精确 910k、JoyAI 精确 180k 等外推说法；能力面板改为成功输入量下界及待验证标注。
+- 旧条目所称“全链路工具闭环”“SSE 一定返回”“内置搜索已接通”等不是本次验证结论；需以具体协议测试为准。图片失败、访问受限不能推导为服务绝对不支持该能力。
+
 ## [Unreleased] - 2026-09-10
 
 ### Added

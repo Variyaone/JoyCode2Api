@@ -308,7 +308,7 @@ func (s *Store) migrate() error {
 		slog.Warn("store: create request_logs indexes failed", "error", err)
 	}
 
-	return nil
+	return s.migrateCosts()
 }
 
 // addColumnIfMissing runs `ALTER TABLE ... ADD COLUMN` and ignores the
@@ -1119,14 +1119,21 @@ func (s *Store) LogRequest(userID, model, endpoint string, stream bool, statusCo
 	if stream {
 		sInt = 1
 	}
-	_, err := s.db.Exec(
-		"INSERT INTO request_logs (api_key, model, endpoint, stream, status_code, latency_ms, error_message, input_tokens, output_tokens) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)",
-		userID, model, endpoint, sInt, statusCode, latencyMs, errMsg, inputTokens, outputTokens,
+	if inputTokens < 0 { inputTokens = 0 }
+	if outputTokens < 0 { outputTokens = 0 }
+	tx, err := s.db.Begin()
+	if err != nil { return err }
+	defer tx.Rollback()
+	now := time.Now()
+	_, err = tx.Exec(
+		"INSERT INTO request_logs (api_key, model, endpoint, stream, status_code, latency_ms, error_message, input_tokens, output_tokens, created_at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)",
+		userID, model, endpoint, sInt, statusCode, latencyMs, errMsg, inputTokens, outputTokens, now.Format("2006-01-02 15:04:05"),
 	)
-	if err != nil {
-		slog.Error("store: log request failed", "user_id", userID, "endpoint", endpoint, "error", err)
-	}
-	return err
+	if err != nil { return err }
+	missing := int64(0)
+	if inputTokens == 0 && outputTokens == 0 { missing = 1 }
+	if err := addCostRow(tx, now.Format("2006-01-02"), model, 1, int64(inputTokens), int64(outputTokens), missing); err != nil { return err }
+	return tx.Commit()
 }
 
 func (s *Store) GetStats() (*Stats, error) {

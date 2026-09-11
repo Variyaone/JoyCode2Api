@@ -45,6 +45,15 @@ code, pre, .ant-typography code, .jc-mono {
   font-family: 'Fira Code', 'SF Mono', Menlo, monospace !important;
 }
 
+/* Benchmark controls wrap independently of the horizontally scrollable table. */
+.jc-benchmarks .ant-card-head-wrapper { flex-wrap: wrap; gap: 8px; }
+.jc-benchmarks .ant-card-head-title { white-space: normal; }
+.jc-benchmarks .ant-space-item,
+.jc-benchmarks .ant-space { max-width: 100%; }
+.jc-benchmarks .ant-select,
+.jc-benchmarks .ant-input-affix-wrapper { max-width: 100%; }
+.jc-benchmarks .ant-alert { overflow-wrap: anywhere; }
+
 /* ─── Layout overrides ─────────────────────────────────────────── */
 
 /* Sider — dark elevated surface */
