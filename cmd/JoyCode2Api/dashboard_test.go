@@ -7,6 +7,7 @@ import (
 	"net/http"
 	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -15,40 +16,87 @@ import (
 // freePort asks the kernel for a free open port that is ready for use.
 func freePort(t *testing.T) int {
 	t.Helper()
-	ln, err := net.Listen("tcp", "127.0.0.1:0")
-	if err != nil {
-		t.Fatalf("get free port: %v", err)
+	for {
+		ln, err := net.Listen("tcp", "127.0.0.1:0")
+		if err != nil {
+			t.Fatalf("get free port: %v", err)
+		}
+		port := ln.Addr().(*net.TCPAddr).Port
+		ln.Close()
+		if port != 34891 {
+			return port
+		}
 	}
-	defer ln.Close()
-	return ln.Addr().(*net.TCPAddr).Port
 }
 
-func TestDashboardEndpoints(t *testing.T) {
+func startTestServer(t *testing.T) string {
+	t.Helper()
 	bin := buildTestBinary(t)
 	port := freePort(t)
+	home := t.TempDir()
+	logPath := filepath.Join(home, "server.log")
+	logFile, err := os.Create(logPath)
+	if err != nil {
+		t.Fatalf("create server log: %v", err)
+	}
+	t.Cleanup(func() {
+		logFile.Close()
+		if t.Failed() {
+			output, _ := os.ReadFile(logPath)
+			t.Logf("server output:\n%s", output)
+		}
+	})
 
-	// Use a temp HOME so the server creates a fresh database with no
-	// auth_password_hash — this bypasses JWT middleware without modifying
-	// production code.  Previous tests used the real HOME, which picked up an
-	// existing password hash and caused 401 responses on /api/* endpoints.
-	tmpHome := t.TempDir()
-
-	cmd := exec.Command(bin, "serve", "--port", fmt.Sprintf("%d", port), "--skip-validation", "--ptkey", "test", "--userid", "test", "--tls=false")
-	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
+	cmd := exec.Command(bin, "serve", "--host", "127.0.0.1", "--port", fmt.Sprintf("%d", port), "--skip-validation", "--ptkey", "test", "--userid", "test", "--tls=false")
+	cmd.Env = testCommandEnv(t, home)
+	cmd.Stdout = logFile
+	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
 		t.Fatalf("start server: %v", err)
 	}
-	defer func() {
-		cmd.Process.Kill()
-		cmd.Wait()
+	// Register process cleanup only after Start succeeds. Wait runs exactly once.
+	done := make(chan struct{})
+	var waitErr error
+	go func() {
+		waitErr = cmd.Wait()
+		close(done)
 	}()
+	t.Cleanup(func() {
+		select {
+		case <-done:
+		default:
+			if err := cmd.Process.Kill(); err != nil && err != os.ErrProcessDone {
+				t.Errorf("kill test server: %v", err)
+			}
+			<-done
+		}
+	})
 
-	// Wait for server to be ready
-	time.Sleep(3 * time.Second)
+	base := fmt.Sprintf("http://127.0.0.1:%d", port)
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	defer client.CloseIdleConnections()
+	deadline := time.Now().Add(10 * time.Second)
+	for time.Now().Before(deadline) {
+		select {
+		case <-done:
+			t.Fatalf("server exited before becoming ready: %v", waitErr)
+		default:
+		}
+		resp, err := client.Get(base + "/api/health")
+		if err == nil {
+			resp.Body.Close()
+			if resp.StatusCode == http.StatusOK {
+				return base
+			}
+		}
+		time.Sleep(50 * time.Millisecond)
+	}
+	t.Fatal("test server did not become ready within 10s")
+	return ""
+}
 
-	base := fmt.Sprintf("http://localhost:%d", port)
+func TestDashboardEndpoints(t *testing.T) {
+	base := startTestServer(t)
 
 	// Test health endpoint
 	t.Run("health", func(t *testing.T) {
@@ -163,22 +211,7 @@ func TestDashboardEndpoints(t *testing.T) {
 }
 
 func TestStaticFileServing(t *testing.T) {
-	bin := buildTestBinary(t)
-	port := freePort(t)
-	tmpHome := t.TempDir()
-
-	cmd := exec.Command(bin, "serve", "--port", fmt.Sprintf("%d", port), "--skip-validation", "--ptkey", "test", "--userid", "test", "--tls=false")
-	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.Start()
-	defer func() {
-		cmd.Process.Kill()
-		cmd.Wait()
-	}()
-	time.Sleep(3 * time.Second)
-
-	base := fmt.Sprintf("http://localhost:%d", port)
+	base := startTestServer(t)
 
 	// Test index.html
 	t.Run("index_html", func(t *testing.T) {
@@ -230,22 +263,7 @@ func TestStaticFileServing(t *testing.T) {
 }
 
 func TestOpenAPIEndpoints(t *testing.T) {
-	bin := buildTestBinary(t)
-	port := freePort(t)
-	tmpHome := t.TempDir()
-
-	cmd := exec.Command(bin, "serve", "--port", fmt.Sprintf("%d", port), "--skip-validation", "--ptkey", "test", "--userid", "test", "--tls=false")
-	cmd.Env = append(os.Environ(), "HOME="+tmpHome)
-	cmd.Stdout = nil
-	cmd.Stderr = nil
-	cmd.Start()
-	defer func() {
-		cmd.Process.Kill()
-		cmd.Wait()
-	}()
-	time.Sleep(3 * time.Second)
-
-	base := fmt.Sprintf("http://localhost:%d", port)
+	base := startTestServer(t)
 
 	// Test /v1/models (OpenAI endpoint)
 	t.Run("v1_models", func(t *testing.T) {
@@ -255,7 +273,19 @@ func TestOpenAPIEndpoints(t *testing.T) {
 		}
 		defer resp.Body.Close()
 		if resp.StatusCode != 200 {
-			t.Errorf("status = %d, want 200", resp.StatusCode)
+			t.Fatalf("status = %d, want 200", resp.StatusCode)
+		}
+		var result struct {
+			Object string `json:"object"`
+			Data   []struct {
+				ID string `json:"id"`
+			} `json:"data"`
+		}
+		if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+			t.Fatalf("decode models: %v", err)
+		}
+		if result.Object != "list" || len(result.Data) != 1 || result.Data[0].ID != "test-model" {
+			t.Errorf("unexpected models response: %+v", result)
 		}
 	})
 
