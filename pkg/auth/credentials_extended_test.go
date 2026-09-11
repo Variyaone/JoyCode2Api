@@ -6,18 +6,25 @@ import (
 	"os"
 	"path/filepath"
 	"runtime"
+	"strings"
 	"testing"
 
 	_ "modernc.org/sqlite"
 )
 
-func TestLoadFromSystem_NonDarwin(t *testing.T) {
-	if runtime.GOOS == "darwin" {
-		t.Skip("skipping non-darwin test on darwin")
+func TestLoadFromSystem_UnsupportedPlatform(t *testing.T) {
+	switch runtime.GOOS {
+	case "darwin", "windows", "linux":
+		t.Skip("platform supports automatic credential discovery")
 	}
+	isolateCredentialEnv(t)
+	if _, err := os.Stat(containerStateDB); err == nil {
+		t.Skip("container state database takes precedence over platform discovery")
+	}
+	t.Setenv(stateDBEnv, "")
 	_, err := LoadFromSystem()
-	if err == nil {
-		t.Fatal("expected error on non-darwin platform, got nil")
+	if err == nil || !strings.Contains(err.Error(), "not supported on "+runtime.GOOS) {
+		t.Fatalf("expected unsupported-platform error, got %v", err)
 	}
 }
 
@@ -96,47 +103,27 @@ func TestStateData_MissingJoyCoderUser(t *testing.T) {
 }
 
 func TestLoadFromSystem_HomeEnvError(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("skipping darwin-specific test on non-darwin")
-	}
-	origHome := os.Getenv("HOME")
-	origXDG := os.Getenv("XDG_CONFIG_HOME")
-	os.Unsetenv("HOME")
-	os.Unsetenv("XDG_CONFIG_HOME")
-	defer func() {
-		os.Setenv("HOME", origHome)
-		if origXDG != "" {
-			os.Setenv("XDG_CONFIG_HOME", origXDG)
-		}
-	}()
+	useSystemCredentialPath(t)
+	t.Setenv("HOME", "")
+	t.Setenv("USERPROFILE", "")
 
 	_, err := LoadFromSystem()
-	if err == nil {
-		t.Fatal("expected error when HOME is unset, got nil")
+	if err == nil || !strings.Contains(err.Error(), "cannot determine home directory") {
+		t.Fatalf("expected home-directory error, got %v", err)
 	}
-	t.Logf("got expected error: %v", err)
 }
 
 func TestLoadFromSystem_InvalidDatabase(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("skipping darwin-specific test on non-darwin")
-	}
-	tmpDir := t.TempDir()
+	isolateCredentialEnv(t)
+	dbPath := os.Getenv(stateDBEnv)
 
-	dbDir := filepath.Join(tmpDir, "Library", "Application Support",
-		"JoyCode", "User", "globalStorage")
-	if err := os.MkdirAll(dbDir, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		t.Fatalf("failed to create db directory: %v", err)
 	}
 
-	dbPath := filepath.Join(dbDir, "state.vscdb")
 	if err := os.WriteFile(dbPath, []byte("this is not a sqlite database"), 0644); err != nil {
 		t.Fatalf("failed to write fake database: %v", err)
 	}
-
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
 
 	_, err := LoadFromSystem()
 	if err == nil {
@@ -146,16 +133,10 @@ func TestLoadFromSystem_InvalidDatabase(t *testing.T) {
 }
 
 func TestLoadFromSystem_ValidDatabase(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("skipping darwin-specific test on non-darwin")
-	}
-	tmpDir := t.TempDir()
+	isolateCredentialEnv(t)
+	dbPath := os.Getenv(stateDBEnv)
 
-	createTestDB(t, tmpDir, `{"joyCoderUser":{"ptKey":"valid-pt-key-abc","userId":"valid-user-xyz"}}`)
-
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	createTestDB(t, dbPath, `{"joyCoderUser":{"ptKey":"valid-pt-key-abc","userId":"valid-user-xyz"}}`)
 
 	creds, err := LoadFromSystem()
 	if err != nil {
@@ -170,18 +151,13 @@ func TestLoadFromSystem_ValidDatabase(t *testing.T) {
 }
 
 func TestLoadFromSystem_DatabaseMissingKey(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("skipping darwin-specific test on non-darwin")
-	}
-	tmpDir := t.TempDir()
+	isolateCredentialEnv(t)
+	dbPath := os.Getenv(stateDBEnv)
 
-	dbDir := filepath.Join(tmpDir, "Library", "Application Support",
-		"JoyCode", "User", "globalStorage")
-	if err := os.MkdirAll(dbDir, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		t.Fatalf("failed to create db directory: %v", err)
 	}
 
-	dbPath := filepath.Join(dbDir, "state.vscdb")
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("failed to create sqlite database: %v", err)
@@ -198,10 +174,6 @@ func TestLoadFromSystem_DatabaseMissingKey(t *testing.T) {
 	}
 	db.Close()
 
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
-
 	_, err = LoadFromSystem()
 	if err == nil {
 		t.Fatal("expected error when JoyCoder.IDE key is missing, got nil")
@@ -210,16 +182,10 @@ func TestLoadFromSystem_DatabaseMissingKey(t *testing.T) {
 }
 
 func TestLoadFromSystem_DatabaseInvalidJSON(t *testing.T) {
-	if runtime.GOOS != "darwin" {
-		t.Skip("skipping darwin-specific test on non-darwin")
-	}
-	tmpDir := t.TempDir()
+	isolateCredentialEnv(t)
+	dbPath := os.Getenv(stateDBEnv)
 
-	createTestDB(t, tmpDir, `{not valid json!!!}`)
-
-	origHome := os.Getenv("HOME")
-	os.Setenv("HOME", tmpDir)
-	defer os.Setenv("HOME", origHome)
+	createTestDB(t, dbPath, `{not valid json!!!}`)
 
 	_, err := LoadFromSystem()
 	if err == nil {
@@ -228,16 +194,13 @@ func TestLoadFromSystem_DatabaseInvalidJSON(t *testing.T) {
 	t.Logf("got expected error: %v", err)
 }
 
-func createTestDB(t *testing.T, baseDir string, jsonValue string) {
+func createTestDB(t *testing.T, dbPath string, jsonValue string) {
 	t.Helper()
 
-	dbDir := filepath.Join(baseDir, "Library", "Application Support",
-		"JoyCode", "User", "globalStorage")
-	if err := os.MkdirAll(dbDir, 0755); err != nil {
+	if err := os.MkdirAll(filepath.Dir(dbPath), 0755); err != nil {
 		t.Fatalf("failed to create db directory: %v", err)
 	}
 
-	dbPath := filepath.Join(dbDir, "state.vscdb")
 	db, err := sql.Open("sqlite", dbPath)
 	if err != nil {
 		t.Fatalf("failed to create sqlite database: %v", err)
