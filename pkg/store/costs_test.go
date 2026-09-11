@@ -23,11 +23,15 @@ func TestCostsFormulaUnknownAndRetention(t *testing.T) {
 		t.Fatal(rows)
 	}
 	for _, r := range rows {
-		if r.Model == "GLM-5.3" && (r.Amount == nil || *r.Amount != 58000000) {
-			t.Fatalf("want $5.80, got %+v", r)
+		// GLM-5.3 official CNY list price: ¥8 in / ¥28 out per MTok, at 7.2 CNY/USD
+		// gives rates 111/388 tenth-micro-USD per token (integer math truncates).
+		// 1M in + 1M out = 499,000,000 tenth-micro-USD = $49.90.
+		if r.Model == "GLM-5.3" && (r.Amount == nil || *r.Amount != 499000000) {
+			t.Fatalf("want $49.90, got %+v", r)
 		}
-		if r.Model == "Kimi-K3-jcloud" && r.Amount != nil {
-			t.Fatal("unknown price must be null")
+		// Kimi-K3-jcloud now inherits the Kimi list price by request.
+		if r.Model == "Kimi-K3-jcloud" && r.Amount == nil {
+			t.Fatal("jcloud model should inherit vendor list price")
 		}
 		if r.Model == "GPT-6 Astra" && r.MissingUsage != 1 {
 			t.Fatal("missing usage not tracked")
@@ -72,8 +76,16 @@ func TestCostBackfillIdempotentAndVersioned(t *testing.T) {
 		t.Fatal("old version overwritten")
 	}
 	for _, r := range rows {
-		if r.PriceVersion == pricing.Version && (r.Amount == nil || *r.Amount != 58) {
-			t.Fatal("tiny request rounded incorrectly")
+		// 1 in + 1 out token at ¥8/¥28 per MTok = 36/7.2e7 tenth-micro-USD = 0 (rounds to free).
+		// Verify the stored value matches the exact integer math rather than a magic constant.
+		if r.PriceVersion == pricing.Version {
+			if r.Amount == nil {
+				t.Fatal("priced model got null amount")
+			}
+			want := 1**r.InputRate + 1**r.OutputRate
+			if *r.Amount != want {
+				t.Fatalf("tiny request amount %d != exact %d", *r.Amount, want)
+			}
 		}
 	}
 }

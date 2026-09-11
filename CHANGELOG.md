@@ -8,7 +8,13 @@ All notable changes to this project will be documented in this file.
 - 公开模型单价及今日/累计/逐日费用估算（USD），明确未知价格和缺失用量；版本化定点单价、幂等历史回填、独立汇总账本不随日志清理丢失。
 - `/api/costs` JWT 接口和费用面板；统一登录、初始化、主布局和 README 的学习研究、信息安全及责任限制声明。
 - GPT-6 Astra、Claude-Opus-5 名称与 Claude `-hq` 映射支持、下拉选项同步（基础文本验证）。
-- Dashboard「公开模型评测」：AA Intelligence Index v4.3 分数、多推理档位、模型筛选、同指标排序、来源链接及采集日期。
+- Dashboard「公开模型评测」
+
+### Changed（20260911 v2）
+- 金额显示两位小数并右对齐；人民币/美元按 1 USD ≈ 7.2 CNY 固定参考汇率切换（非实时汇率，仅用于估算展示）。
+- 按模型累计表取消分页；模型行添加品牌色块标识。
+- jcloud 与国产模型按各官方站价格计价：Kimi-K3（jcloud 同）按 Kimi 官网、GLM 按智谱官网、DeepSeek-V4-Pro 按 DeepSeek 官网 peak 价、Doubao-Seed-2.0-pro 按火山方舟 (32,128] 阶梯价；均标注为参考价。
+- 评分卡改为多维对比（AA 指数 + BenchLM 综合分），仅展示有可核实成绩的模型，移除实时刷新按钮与 Arena 空源。：AA Intelligence Index v4.3 分数、多推理档位、模型筛选、同指标排序、来源链接及采集日期。
 - `/api/model-benchmarks`：随程序嵌入的 JSON 公开评分快照，沿用 Dashboard JWT 鉴权，不自动访问公网。
 - SWE-bench 官方榜单与 Arena 来源状态说明；缺失/访问受限记录不填分数。jcloud 基础模型参考、DeepSeek 日期版本与名称对应记录分开处理。
 

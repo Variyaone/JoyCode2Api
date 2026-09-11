@@ -72,14 +72,17 @@ func TestBenchmarkSnapshot(t *testing.T) {
 				t.Fatal("invalid AA snapshot score")
 			}
 		}
-		if model.ID == "DeepSeek-V4-Pro" && (model.Mapping != "version_ambiguous" || len(model.Results) != 2) {
+		if model.ID == "DeepSeek-V4-Pro" && (model.Mapping != "version_ambiguous" || len(model.Results) != 3) {
 			t.Fatal("DeepSeek versions must stay separate")
 		}
 		if (model.ID == "Kimi-K3-jcloud" || model.ID == "GLM-5.2-jcloud") && model.Mapping != "deployment_reference" {
 			t.Fatal("jcloud must not claim identical deployment")
 		}
-		if model.Mapping == "unverified" && len(model.Results) != 0 {
+		if model.Mapping == "unverified" && model.ID == "JoyAI-Code-1.5" && len(model.Results) != 0 {
 			t.Fatal("unverified scores must remain absent")
+		}
+		if model.ID == "Claude-Opus-4.8" && len(model.Results) == 0 {
+			t.Fatal("BenchLM supported score should be attached")
 		}
 	}
 	for _, model := range joycode.Models {

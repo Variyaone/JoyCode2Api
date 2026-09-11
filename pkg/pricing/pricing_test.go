@@ -25,8 +25,8 @@ func TestRatesAndAliases(t *testing.T) {
 	if Lookup("GPT-unknown").Input != nil {
 		t.Fatal("unknown prefix was priced")
 	}
-	if Lookup("Kimi-K3-jcloud").Input != nil {
-		t.Fatal("deployment inherited price")
+	if Lookup("Kimi-K3-jcloud").Input == nil {
+		t.Fatal("jcloud model must inherit vendor list price")
 	}
 	if *Lookup("Claude-Opus-5-hq").Input != 50 {
 		t.Fatal("explicit alias missing")

@@ -4,8 +4,8 @@
   "notice": "公开模型评测，不是 JoyCode 部署实测。分数受模型版本、推理档位和评测框架影响；不同榜单不能直接相加。",
   "sources": [
     {"id":"aa", "name":"Artificial Analysis", "metric":"Intelligence Index", "version":"v4.3", "unit":"指数", "higher_is_better":true, "url":"https://artificialanalysis.ai/leaderboards/models", "methodology_url":"https://artificialanalysis.ai/methodology/intelligence-benchmarking", "status":"已采集", "description":"独立评测。10 项评测加权：Agents 30%、Coding 20%、Scientific Reasoning 20%、General 30%。主要衡量英文文本能力，不是百分制正确率；多模态另测。表格保留原站整数精度。"},
-    {"id":"swe", "name":"SWE-bench 官方", "metric":"Verified · Bash Only", "version":"mini-SWE-agent（以每条记录版本为准）", "unit":"% Resolved", "higher_is_better":true, "url":"https://www.swebench.com/", "methodology_url":"https://www.swebench.com/", "status":"已核查默认榜单", "description":"500 道真实仓库修复任务。成绩属于模型 + agent + 配置的组合。当前默认榜单未取得这些新型号的精确匹配成绩，不借用旧型号，也不混排不同框架或赛道。"},
-    {"id":"arena", "name":"Arena / LMArena", "metric":"用户偏好排名", "version":"待核实", "unit":"榜单分数", "higher_is_better":true, "url":"https://arena.ai/leaderboard", "methodology_url":"https://arena.ai/leaderboard", "status":"本次访问受限", "description":"匿名对战用户偏好，文本、代码、视觉等赛道分开。此次 Cloudflare 阻止访问，未取得分数；这不代表模型未上榜。"}
+    {"id":"benchlm", "name":"BenchLM BenchAlign", "metric":"多维综合分", "version":"v5.2 · 2026-09-10 快照", "unit":"分", "higher_is_better":true, "url":"https://benchlm.ai/", "methodology_url":"https://benchlm.ai/", "status":"已采集（仅估算档）", "description":"BenchLM 汇总公开基准并按维度（Agents/Coding/Reasoning/Knowledge/Multilingual/Instruction/Math）整合，标注证据强度。JoyCode 侧机型多为 ESTIMATED（有限直接证据），分数为参考而非直接实测。"},
+    {"id":"swe", "name":"SWE-bench 官方", "metric":"Verified · Bash Only", "version":"mini-SWE-agent（以每条记录版本为准）", "unit":"% Resolved", "higher_is_better":true, "url":"https://www.swebench.com/", "methodology_url":"https://www.swebench.com/", "status":"已核查默认榜单", "description":"500 道真实仓库修复任务。成绩属于模型 + agent + 配置的组合。当前默认榜单未取得这些新型号的精确匹配成绩，不借用旧型号，也不混排不同框架或赛道。"}
   ],
   "models": [
     {"id":"GPT-6 Astra", "mapping":"name_match", "note":"公开名称匹配；JoyCode 实际推理档位未与 AA 配置核对。", "results":[
@@ -14,28 +14,33 @@
       {"source_id":"aa","public_model":"GPT-6 Astra","variant":"high","score":51,"url":"https://artificialanalysis.ai/models/gpt-6-astra-high","published_at":null,"footnote":""},
       {"source_id":"aa","public_model":"GPT-6 Astra","variant":"medium","score":50,"url":"https://artificialanalysis.ai/models/gpt-6-astra-medium","published_at":null,"footnote":""},
       {"source_id":"aa","public_model":"GPT-6 Astra","variant":"low","score":46,"url":"https://artificialanalysis.ai/models/gpt-6-astra-low","published_at":null,"footnote":""},
-      {"source_id":"aa","public_model":"GPT-6 Astra","variant":"Non-reasoning","score":45,"url":"https://artificialanalysis.ai/models/gpt-6-astra-non-reasoning","published_at":null,"footnote":""}
+      {"source_id":"aa","public_model":"GPT-6 Astra","variant":"Non-reasoning","score":45,"url":"https://artificialanalysis.ai/models/gpt-6-astra-non-reasoning","published_at":null,"footnote":""},
+      {"source_id":"benchlm","public_model":"GPT-6 Astra","variant":"ESTIMATED","score":84.08,"url":"https://benchlm.ai/","published_at":"2026-09-10","footnote":"BenchLM 估算档：AG 70 / CO 75 / RE 90 / MM 83 / KN 82 / IF 85 / MA —；上下文 1.05M；token/s 54。"}
     ]},
     {"id":"Claude-Opus-5", "mapping":"name_match", "note":"公开名称匹配；代理原生路径目前关闭 thinking，不代表能达到公开 max 档成绩。", "results":[
       {"source_id":"aa","public_model":"Claude Opus 5","variant":"max","score":51,"url":"https://artificialanalysis.ai/models/claude-opus-5","published_at":null,"footnote":""},
       {"source_id":"aa","public_model":"Claude Opus 5","variant":"xhigh","score":50,"url":"https://artificialanalysis.ai/models/claude-opus-5-xhigh","published_at":null,"footnote":""},
       {"source_id":"aa","public_model":"Claude Opus 5","variant":"high","score":48,"url":"https://artificialanalysis.ai/models/claude-opus-5-high","published_at":null,"footnote":""},
       {"source_id":"aa","public_model":"Claude Opus 5","variant":"medium","score":45,"url":"https://artificialanalysis.ai/models/claude-opus-5-medium","published_at":null,"footnote":""},
-      {"source_id":"aa","public_model":"Claude Opus 5","variant":"low","score":40,"url":"https://artificialanalysis.ai/models/claude-opus-5-low","published_at":null,"footnote":""}
+      {"source_id":"aa","public_model":"Claude Opus 5","variant":"low","score":40,"url":"https://artificialanalysis.ai/models/claude-opus-5-low","published_at":null,"footnote":""},
+      {"source_id":"benchlm","public_model":"Claude Opus 5","variant":"SUPPORTED","score":81.97,"url":"https://benchlm.ai/","published_at":"2026-09-10","footnote":"BenchLM 支持档：AG 78 / CO 76 / RE 76 / MM 89 / KN 82 / Elo 1493；token/s 52。"}
     ]},
     {"id":"GPT-5.6 Sol", "mapping":"name_match", "note":"公开名称匹配；公开档位与 JoyCode 部署参数可能不同。", "results":[
       {"source_id":"aa","public_model":"GPT-5.6 Sol","variant":"max","score":47,"url":"https://artificialanalysis.ai/models/gpt-5-6-sol","published_at":null,"footnote":""},
       {"source_id":"aa","public_model":"GPT-5.6 Sol","variant":"xhigh","score":44,"url":"https://artificialanalysis.ai/models/gpt-5-6-sol-xhigh","published_at":null,"footnote":""},
       {"source_id":"aa","public_model":"GPT-5.6 Sol","variant":"high","score":42,"url":"https://artificialanalysis.ai/models/gpt-5-6-sol-high","published_at":null,"footnote":""},
       {"source_id":"aa","public_model":"GPT-5.6 Sol","variant":"medium","score":39,"url":"https://artificialanalysis.ai/models/gpt-5-6-sol-medium","published_at":null,"footnote":""},
-      {"source_id":"aa","public_model":"GPT-5.6 Sol","variant":"low","score":34,"url":"https://artificialanalysis.ai/models/gpt-5-6-sol-low","published_at":null,"footnote":""}
+      {"source_id":"aa","public_model":"GPT-5.6 Sol","variant":"low","score":34,"url":"https://artificialanalysis.ai/models/gpt-5-6-sol-low","published_at":null,"footnote":""},
+      {"source_id":"benchlm","public_model":"GPT-5.6 Sol","variant":"SUPPORTED","score":80.63,"url":"https://benchlm.ai/","published_at":"2026-09-10","footnote":"BenchLM 支持档：AG 70 / CO 74 / RE 70 / MM 88 / KN 80 / IF 89 / MA 97 / Elo 1483；token/s 60。"}
     ]},
     {"id":"GLM-5.3", "mapping":"name_match", "note":"公开名称匹配；max 档公开评测，不是代理默认档位的成绩。", "results":[
-      {"source_id":"aa","public_model":"GLM-5.3","variant":"max","score":45,"url":"https://artificialanalysis.ai/models/glm-5-3","published_at":null,"footnote":""}
+      {"source_id":"aa","public_model":"GLM-5.3","variant":"max","score":45,"url":"https://artificialanalysis.ai/models/glm-5-3","published_at":null,"footnote":""},
+      {"source_id":"benchlm","public_model":"GLM-5.3","variant":"ESTIMATED","score":68.37,"url":"https://benchlm.ai/","published_at":"2026-09-10","footnote":"BenchLM 估算档：AG 68 / CO 61 / RE 76 / KN 62；上下文 1M；token/s 59。原站未列价（自营部署），价格以智谱官网为准。"}
     ]},
     {"id":"Kimi-K3", "mapping":"name_match", "note":"公开名称匹配；低推理档位保留原站星号，不纳入主排名。", "results":[
       {"source_id":"aa","public_model":"Kimi K3","variant":"max","score":44,"url":"https://artificialanalysis.ai/models/kimi-k3","published_at":null,"footnote":""},
-      {"source_id":"aa","public_model":"Kimi K3","variant":"low","score":34,"url":"https://artificialanalysis.ai/models/kimi-k3-low","published_at":null,"footnote":"原站显示 34*，星号口径未核实；仅保留参考。"}
+      {"source_id":"aa","public_model":"Kimi K3","variant":"low","score":34,"url":"https://artificialanalysis.ai/models/kimi-k3-low","published_at":null,"footnote":"原站显示 34*，星号口径未核实；仅保留参考。"},
+      {"source_id":"benchlm","public_model":"Kimi K3","variant":"SUPPORTED","score":74.82,"url":"https://benchlm.ai/","published_at":"2026-09-10","footnote":"BenchLM 支持档：AG 72 / CO 68 / RE 79 / MM 90 / KN 72 / Elo 1489；token/s 38。"}
     ]},
     {"id":"MiniMax-M3", "mapping":"name_match", "note":"公开名称匹配；原站未在模型名称上单列推理档位。", "results":[
       {"source_id":"aa","public_model":"MiniMax-M3","variant":"原站未单列","score":30,"url":"https://artificialanalysis.ai/models/minimax-m3","published_at":null,"footnote":""}
@@ -48,10 +53,13 @@
     ]},
     {"id":"DeepSeek-V4-Pro", "mapping":"version_ambiguous", "note":"公开榜单区分 0424 和 0813 版本，JoyCode 名称没有日期。两条都展示为参考，不擅自选择更高分。", "results":[
       {"source_id":"aa","public_model":"DeepSeek V4 Pro 0813","variant":"max","score":36,"url":"https://artificialanalysis.ai/models/deepseek-v4-pro","published_at":null,"footnote":"需确认 JoyCode 是否部署 0813 版本。"},
-      {"source_id":"aa","public_model":"DeepSeek V4 Pro (0424)","variant":"max","score":31,"url":"https://artificialanalysis.ai/models/deepseek-v4-pro-0424","published_at":null,"footnote":"需确认 JoyCode 是否部署 0424 版本。"}
+      {"source_id":"aa","public_model":"DeepSeek V4 Pro (0424)","variant":"max","score":31,"url":"https://artificialanalysis.ai/models/deepseek-v4-pro-0424","published_at":null,"footnote":"需确认 JoyCode 是否部署 0424 版本。"},
+      {"source_id":"benchlm","public_model":"DeepSeek V4 Pro 0813","variant":"ESTIMATED","score":66.38,"url":"https://benchlm.ai/","published_at":"2026-09-10","footnote":"BenchLM 估算档：AG 57 / CO 52 / RE 60 / MA 80；上下文 1M；token/s 69。"}
     ]},
-    {"id":"Claude-Opus-4.8", "mapping":"unverified", "note":"本次 AA 当前榜单未取得精确匹配成绩；不以 Opus 5 或 4.6 分数代替。", "results":[]},
-    {"id":"Doubao-Seed-2.0-pro", "mapping":"unverified", "note":"本次未取得可核实成绩；Doubao Seed Code 是另一型号，不能代替。", "results":[]},
+    {"id":"Claude-Opus-4.8", "mapping":"unverified", "note":"AA 当前榜单未取得精确匹配成绩；不以 Opus 5 或 4.6 分数代替。", "results":[
+      {"source_id":"benchlm","public_model":"Claude Opus 4.8","variant":"SUPPORTED","score":72.22,"url":"https://benchlm.ai/","published_at":"2026-09-10","footnote":"BenchLM 支持档：AG 62 / CO 66 / RE 56 / MM 88 / KN 71 / IF 75 / MA 65 / Elo 1473；token/s 58。"}
+    ]},
+    {"id":"Doubao-Seed-2.0-pro", "mapping":"unverified", "note":"AA 未取得可核实成绩；Doubao Seed Code 是另一型号，不能代替。", "results":[]},
     {"id":"JoyAI-Code-1.5", "mapping":"unverified", "note":"本次未取得可核实的公开评测成绩。", "results":[]}
   ]
 }
