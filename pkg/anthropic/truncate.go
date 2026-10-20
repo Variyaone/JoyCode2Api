@@ -28,11 +28,18 @@ const (
 	maxTokensPerImage = imageBaseTokens + imagePatchToken*25 // ~4K screenshot
 )
 
-// estimateTokens gives a rough token count estimate for the request messages.
+// estimateTokens gives a rough token count estimate for the whole request.
 // Uses byte-length / bytesPerToken as approximation for text content.
 // Image blocks are estimated by patch count (OpenAI/Anthropic convention)
 // instead of by raw base64 byte length, so a screenshot-heavy turn estimates
 // in the thousands of tokens rather than hundreds of thousands.
+//
+// The estimate includes the untruncatable fixed overhead: the system prompt
+// and every tool description + input_schema. A workflow session that loads a
+// browser MCP (Playwright/Chrome DevTools) can ship 30K+ tokens of schema
+// alone; without counting it the preemptive pass believes a request is small
+// while the upstream is already over its window, and it also undercounts what
+// remains after messages have been cut to the floor.
 func estimateTokens(req *MessageRequest) int {
 	totalBytes := int64(0)
 	imageTokens := 0
@@ -44,10 +51,22 @@ func estimateTokens(req *MessageRequest) int {
 		totalBytes += contentBytes
 		imageTokens += imgTokens
 	}
+	totalBytes += estimateToolsBytes(req.Tools)
 	if totalBytes == 0 && imageTokens == 0 {
 		return 0
 	}
 	return int(float64(totalBytes)/bytesPerToken) + imageTokens
+}
+
+// estimateToolsBytes approximates the serialized size of the tool list.
+// Anthropic InputSchema is arbitrary JSON; the name + description + schema all
+// ride along on every upstream call, so they count against the context window.
+func estimateToolsBytes(tools []Tool) int64 {
+	var n int64
+	for _, t := range tools {
+		n += int64(len(t.Name) + len(t.Description) + len(t.InputSchema))
+	}
+	return n
 }
 
 // estimateMessageTokens splits a message's content into text-byte cost and
@@ -265,8 +284,17 @@ func pixelDimsFromBase64(b64 string) (int, int) {
 }
 
 // PreemptiveTruncate checks if the request likely exceeds the model's context limit
-// and proactively truncates before sending. Returns the number of truncation rounds performed.
-// Returns -1 if truncation failed to bring estimated tokens below threshold.
+// and proactively truncates before sending. Returns the number of truncation
+// rounds performed.
+//
+// It never rejects the request. When progressive truncation stalls (messages
+// down to the keep-floor but the estimate is still over — usually large tool
+// schemas or a huge tail message, which the estimator may over- or
+// under-count), it collapses the conversation to first-message + notice +
+// last two messages and lets the upstream be the final arbiter. If the
+// upstream still says the context is too large, the handlers' retry loops
+// surface that error with the real upstream message; refusing here on a rough
+// estimate produced false 400s for requests that would have succeeded.
 func PreemptiveTruncate(req *MessageRequest) int {
 	window := float64(contextWindowSize)
 	ratio := float64(preemptiveThresholdRatio)
@@ -282,16 +310,18 @@ func PreemptiveTruncate(req *MessageRequest) int {
 			return rounds
 		}
 		if !truncateMessages(req) {
-			slog.Warn("preemptive truncation: cannot truncate further", "estimated_tokens", estimated, "threshold", threshold, "rounds", rounds)
-			return -1
+			slog.Warn("preemptive truncation stalled, sending minimal conversation and letting upstream decide",
+				"estimated_tokens", estimated, "threshold", threshold, "rounds", rounds)
+			truncateMessagesToFloor(req)
+			return rounds
 		}
 		rounds++
 		slog.Warn("preemptive truncation round", "round", rounds, "estimated_tokens_before", estimated, "threshold", threshold)
 	}
-	// Check if we actually got below threshold
-	if estimateTokens(req) > threshold {
-		slog.Warn("preemptive truncation exhausted rounds without reaching threshold")
-		return -1
+	if estimated := estimateTokens(req); estimated > threshold {
+		slog.Warn("preemptive truncation exhausted rounds; sending minimal conversation and letting upstream decide",
+			"estimated_tokens", estimated, "threshold", threshold)
+		truncateMessagesToFloor(req)
 	}
 	return rounds
 }
@@ -417,15 +447,10 @@ func truncateMessages(req *MessageRequest) bool {
 	}
 
 	removed := cutEnd - keepFirst
-	notice := "[System: Earlier conversation messages have been auto-truncated to fit within the model's context window. Some earlier context is now missing. Continue with the remaining conversation.]"
-	noticeBytes, _ := json.Marshal(notice)
 
 	var truncated []MessageParam
 	truncated = append(truncated, req.Messages[:keepFirst]...)
-	truncated = append(truncated, MessageParam{
-		Role:    "assistant",
-		Content: json.RawMessage(noticeBytes),
-	})
+	truncated = append(truncated, truncationNotice())
 	truncated = append(truncated, req.Messages[cutEnd:]...)
 
 	slog.Warn("auto-truncated messages for context limit",
@@ -438,4 +463,39 @@ func truncateMessages(req *MessageRequest) bool {
 
 	req.Messages = truncated
 	return true
+}
+
+func truncationNotice() MessageParam {
+	notice := "[System: Earlier conversation messages have been auto-truncated to fit within the model's context window. Some earlier context is now missing. Continue with the remaining conversation.]"
+	noticeBytes, _ := json.Marshal(notice)
+	return MessageParam{
+		Role:    "assistant",
+		Content: json.RawMessage(noticeBytes),
+	}
+}
+
+// truncateMessagesToFloor collapses the conversation to its smallest legal
+// shape for the upstream: first message + truncation notice + the last two
+// messages (or all messages when there are fewer than four). Unlike
+// truncateMessages this always succeeds and ignores tool_use/tool_result
+// pairing at the boundary — it is the last-resort fallback, and an orphaned
+// trailing tool_result is handled by convertUserBlocks, which drops tool_use
+// blocks that have no result.
+func truncateMessagesToFloor(req *MessageRequest) {
+	n := len(req.Messages)
+	if n <= 4 {
+		return
+	}
+	normalized := make([]MessageParam, len(req.Messages))
+	copy(normalized, req.Messages)
+	if normalized[0].Role != "user" {
+		normalized[0].Role = "user"
+	}
+	kept := make([]MessageParam, 0, 4)
+	kept = append(kept, normalized[0])
+	kept = append(kept, truncationNotice())
+	kept = append(kept, normalized[n-2:]...)
+	slog.Warn("collapsing conversation to floor",
+		"original_count", n, "kept_first", 1, "kept_last", 2)
+	req.Messages = kept
 }

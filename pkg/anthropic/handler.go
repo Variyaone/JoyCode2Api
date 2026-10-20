@@ -120,11 +120,10 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 		h.handleNativeAnthropicNonStream(w, r, req, client, systemDefault)
 		return
 	}
-	// Preemptive truncation: estimate tokens and truncate before sending
-	if rounds := PreemptiveTruncate(req); rounds < 0 {
-		writeAnthropicRequestError(w, "上下文过长，自动截断后仍超出限制，请使用 /compact 或开启新对话。")
-		return
-	} else if rounds > 0 {
+	// Preemptive truncation: estimate tokens and truncate before sending. It
+	// always sends something — estimates can miss tool schemas and fixed
+	// overhead, so the upstream (not the estimator) is the arbiter.
+	if rounds := PreemptiveTruncate(req); rounds > 0 {
 		slog.Warn("preemptive truncation applied (non-stream)", "rounds", rounds)
 	}
 
@@ -133,10 +132,24 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 	if joycode.IsResponsesAPIModel(resolveModel(req.Model, store.GetAccountDefaultModel(r), systemDefault)) {
 		// The upstream always returns SSE even for stream:false, so stream and
 		// aggregate into a single Anthropic message.
-		jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
-		jcBody["stream"] = true
-		respBody := joycode.ChatToResponses(jcBody)
-		resp, err := client.PostStream("/api/saas/openai/v1/responses", respBody)
+		postResponses := func() (*http.Response, error) {
+			jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+			jcBody["stream"] = true
+			return client.PostStream("/api/saas/openai/v1/responses", joycode.ChatToResponses(jcBody))
+		}
+		resp, err := postResponses()
+		// Progressive truncation on context limit, same policy as the chat path.
+		for truncRound := 0; err != nil && isContextLimitError(err.Error()) && truncRound < maxTruncationRounds; truncRound++ {
+			reqLog(r).Warn("responses (non-stream) context limit, truncating", "round", truncRound+1)
+			if !truncateMessages(req) {
+				break
+			}
+			resp, err = postResponses()
+		}
+		if err != nil && isContextLimitError(err.Error()) {
+			truncateMessagesToFloor(req)
+			resp, err = postResponses()
+		}
 		if err != nil {
 			// One-shot content repair before anything reaches the client.
 			errMsg := err.Error()
@@ -151,13 +164,14 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 					writeAnthropicError(w, 504, "上游服务响应超时，请稍后重试。原始错误: "+msg)
 					return
 				}
+				if isContextLimitError(msg) {
+					writeAnthropicRequestError(w, "上下文长度超出模型限制，已尝试自动截断但仍无法满足。请压缩对话历史或开启新对话。原始错误: "+msg)
+					return
+				}
 				writeAnthropicError(w, 500, msg)
 				return
 			}
-			jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
-			jcBody["stream"] = true
-			respBody = joycode.ChatToResponses(jcBody)
-			resp, err = client.PostStream("/api/saas/openai/v1/responses", respBody)
+			resp, err = postResponses()
 			if err != nil {
 				writeAnthropicError(w, 500, err.Error())
 				return
@@ -332,11 +346,10 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 	jcBody["stream"] = true
 	logRequestDetails(r, "translated request (stream)", jcBody)
 
-	// Preemptive truncation: estimate tokens and truncate before sending
-	if rounds := PreemptiveTruncate(req); rounds < 0 {
-		writeAnthropicRequestError(w, "上下文过长，自动截断后仍超出限制，请使用 /compact 或开启新对话。")
-		return
-	} else if rounds > 0 {
+	// Preemptive truncation: estimate tokens and truncate before sending. It
+	// always sends something — estimates are rough, so the upstream (not the
+	// estimator) is the arbiter; a true overflow is retried below.
+	if rounds := PreemptiveTruncate(req); rounds > 0 {
 		reqLog(r).Warn("preemptive truncation applied (stream)", "rounds", rounds)
 	}
 
@@ -634,6 +647,25 @@ func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, 
 	}()
 
 	resp, err := client.PostStream("/api/saas/openai/v1/responses", body)
+	// Progressive truncation on context limit, same policy as the chat stream
+	// path. Only pings were sent so far, so the repair is invisible.
+	for truncRound := 0; err != nil && isContextLimitError(err.Error()) && truncRound < maxTruncationRounds; truncRound++ {
+		reqLog(r).Warn("responses stream context limit, truncating", "round", truncRound+1)
+		if !truncateMessages(req) {
+			break
+		}
+		jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+		jcBody["stream"] = true
+		body = joycode.ChatToResponses(jcBody)
+		resp, err = client.PostStream("/api/saas/openai/v1/responses", body)
+	}
+	if err != nil && isContextLimitError(err.Error()) {
+		truncateMessagesToFloor(req)
+		jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+		jcBody["stream"] = true
+		body = joycode.ChatToResponses(jcBody)
+		resp, err = client.PostStream("/api/saas/openai/v1/responses", body)
+	}
 	// One-shot content repair: SSE headers and message_start were committed
 	// above, but a repaired request that succeeds produces a normal full
 	// message, so the client just sees a slow start.
@@ -657,6 +689,12 @@ func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, 
 	close(stopHeartbeat)
 	<-heartbeatDone
 	if err != nil {
+		errMsg := err.Error()
+		if isContextLimitError(errMsg) {
+			reqLog(r).Warn("context limit exceeded (responses stream), cannot proceed even after progressive truncation")
+			writeStreamError(w, flusher, "上下文长度超出模型限制，已尝试自动截断但仍无法满足。请压缩对话历史或开启新对话。原始错误: "+errMsg)
+			return
+		}
 		reqLog(r).Error("responses stream failed", "error", err)
 		writeStreamError(w, flusher, err.Error())
 		return

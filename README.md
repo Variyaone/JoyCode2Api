@@ -155,6 +155,28 @@ nohup ./JoyCode2Api serve --skip-validation > joycode.log 2>&1 &
 
 Docker 部署时用 `JOYCODE_STATE_DB` 环境变量挂载 `state.vscdb`（如需本地凭据）。
 
+### Windows 无管理员权限热替换（`deploy-without-admin.bat`）
+
+用于在不重装、不需要管理员权限的前提下，把新编译的二进制热替换到正在运行的 daemon 上，并自带健康检查与失败回滚。
+
+```bat
+rem 自动探测新二进制（JoyCode2Api.exe.new 等）并部署
+deploy-without-admin.bat
+
+rem 指定新二进制路径
+deploy-without-admin.bat D:\path\to\JoyCode2Api.exe
+
+rem 只做检查，不修改任何文件（推荐先跑一次）
+deploy-without-admin.bat --dry-run
+
+rem 指定端口（默认 34891）
+deploy-without-admin.bat --port 34891
+```
+
+事务流程：定位新二进制 → 停服（daemon stop + taskkill）→ 时间戳备份 → 替换 → 启动 → 健康检查（约 90s）→ 收尾；健康检查失败自动回滚到备份并重启。新旧二进制字节相同（`fc /b`）时自动跳过，避免无谓停服。
+
+> 注意：脚本为 **GBK 编码 + CRLF 行尾符**，请勿改为 UTF-8 或添加 `chcp 65001`，否则 cmd.exe 会因代码页切换导致脚本解析错位。
+
 ---
 
 ## API 参考

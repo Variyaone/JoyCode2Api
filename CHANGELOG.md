@@ -2,6 +2,16 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-10-16
+
+### 部署脚本升级（deploy-without-admin.bat）
+- 重写为自包含 7 步事务化部署流程：定位新二进制 → 停服 → 备份 → 替换 → 启动 → 健康检查（约 90s）→ 收尾；失败自动回滚（`.bad` 隔离 + `.bak` 恢复 + 重启 + 二次健康检查）。
+- 新增参数：`--dry-run`/`-n`（只检查不改动）、`--port N`（默认 34891）、`--help`/`-h`、位置参数指定新二进制路径。
+- 自动探测多种新二进制命名（`JoyCode2Api.exe.new`、`JoyCode2Api.new.exe`、`JoyCode2Api-new.exe`、`JoyCode2Api.exe.new.exe`），消除与 `手动部署-openclaw.bat` 的命名不一致。
+- 引入 `fc /b` 字节比对：新旧二进制相同时跳过部署，避免无谓停服；备份采用时间戳命名 `JoyCode2Api.exe.bak-<TS>`。
+- 修复编码陷阱：原脚本 `chcp 65001` 会导致 cmd.exe 切换代码页后重新解析脚本字节错位，产生 `'-' is not recognized` 等报错；现改为 **GBK 编码 + CRLF 行尾符 + 不使用 chcp**，与 cmd 默认代码页 936 一致。
+- 参数解析改用 `ARG1/ARG2` 变量 + `goto` 循环替代 `shift`；dry-run 模式下跳过 `pause` 避免阻塞。
+
 ## [Unreleased] - 2026-10-09
 
 ### 上游容错（对齐 cc-switch 同类能力，单上游适配版）
