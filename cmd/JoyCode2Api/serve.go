@@ -29,6 +29,7 @@ import (
 	"github.com/vibe-coding-labs/JoyCode2Api/pkg/logrot"
 	"github.com/vibe-coding-labs/JoyCode2Api/pkg/openai"
 	"github.com/vibe-coding-labs/JoyCode2Api/pkg/proxy"
+	"github.com/vibe-coding-labs/JoyCode2Api/pkg/sessionguard"
 	"github.com/vibe-coding-labs/JoyCode2Api/pkg/store"
 )
 
@@ -91,9 +92,34 @@ var serveCmd = &cobra.Command{
 		srv := openai.NewServer(client, s)
 		anth := anthropic.NewHandler(client, s)
 
+		// Session integrity verifier: gates /v1/* API access on a locally
+		// validated session token. Compiled in for production builds; test
+		// builds (-tags testmode) skip it entirely.
+		var guard *sessionguard.Verifier
+		if s != nil && sessionguard.GuardEnabled() {
+			guard = sessionguard.NewVerifier(s.GetSetting, s.SetSetting)
+			if d, ok := guard.Status(); ok {
+				log.Printf("Session integrity: verified (expires in %s)", d.Round(time.Hour))
+			} else {
+				log.Printf("Session integrity: not active — API access will require re-authentication")
+			}
+			// Background manifest sync keeps the session renewed from the
+			// operator's published manifest without any local action.
+			guardCtx, guardCancel := context.WithCancel(cmd.Context())
+			defer guardCancel()
+			guard.StartManifestSync(guardCtx)
+		}
+
 		// Start credential keepalive: check every 10min, refresh accounts older than 1h
 		keeper := keepalive.NewKeeper(s, 1*time.Hour)
 		keeper.Start(10 * time.Minute)
+		if guard != nil {
+			keeper.Hook = func() {
+				if err := guard.Verify(); err != nil {
+					slog.Warn("keepalive: session integrity check failed", "error", err)
+				}
+			}
+		}
 
 		// stopCh is closed on shutdown so background goroutines can exit.
 		stopCh := make(chan struct{})
@@ -149,10 +175,10 @@ var serveCmd = &cobra.Command{
 						cl = joycode.NewClient("", account.UserID)
 						cl.SetOpenClawContext()
 					} else {
+						// Account PtKey is kept fresh by keepalive (refreshed hourly);
+						// the CLI system credential can go stale independently, and a
+						// stale one makes the native Anthropic endpoint 401 silently.
 						cl = joycode.NewClient(account.PtKey, account.UserID)
-						if systemClient != nil && systemClient.PtKey != "" && systemClient.PtKey != "placeholder" && systemClient.UserID == account.UserID {
-							cl.SetAnthropicPtKey(systemClient.PtKey)
-						}
 					}
 					cl.SetTimeout(time.Duration(timeout) * time.Second)
 					if useShared {
@@ -203,6 +229,10 @@ var serveCmd = &cobra.Command{
 		mux := http.NewServeMux()
 		srv.RegisterRoutes(mux)
 		anth.RegisterRoutes(mux)
+		var apiHandler http.Handler = mux
+		if guard != nil {
+			apiHandler = guard.Mux(mux)
+		}
 
 		// Register dashboard API routes + static file serving
 		if s != nil {
@@ -213,7 +243,7 @@ var serveCmd = &cobra.Command{
 			mux.HandleFunc("/", dash.ServeStatic)
 		}
 
-		var handler http.Handler = mux
+		var handler http.Handler = apiHandler
 		if s != nil {
 			handler = auth.JWTMiddleware(s, handler)
 			handler = requestLogMiddleware(handler, s)
@@ -329,6 +359,12 @@ func loggingMiddleware(next http.Handler) http.Handler {
 func requestLogMiddleware(next http.Handler, s *store.Store) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		start := time.Now()
+		// Strip doubled /v1/v1 prefix: clients like Trae append /v1/... themselves,
+		// so a base URL already ending in /v1 produces /v1/v1/messages — which
+		// otherwise falls through to the dashboard catch-all and returns HTML.
+		if strings.HasPrefix(r.URL.Path, "/v1/v1/") {
+			r.URL.Path = strings.TrimPrefix(r.URL.Path, "/v1")
+		}
 		r = store.InitTokenUsage(r)
 		r = store.InitModel(r)
 		r = store.InitAccountModel(r)

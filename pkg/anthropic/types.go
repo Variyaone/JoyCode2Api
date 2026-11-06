@@ -170,6 +170,10 @@ type sseMessageDelta struct {
 	Type  string    `json:"type"`
 	Delta deltaStop `json:"delta"`
 	Usage struct {
+		// InputTokens lets clients (Claude Code / desktop app) track the context
+		// waterline and trigger their own native auto-compact. Without it the
+		// client never sees the context fill up and only learns at hard failure.
+		InputTokens  int `json:"input_tokens"`
 		OutputTokens int `json:"output_tokens"`
 	} `json:"usage"`
 }

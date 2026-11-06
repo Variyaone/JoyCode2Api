@@ -150,7 +150,7 @@ func TestPreemptiveTruncate_ImageHeavyConversationFits(t *testing.T) {
 		msgs = append(msgs, MessageParam{Role: "assistant", Content: json.RawMessage(`"analysis"`)})
 	}
 	req := &MessageRequest{Messages: msgs}
-	rounds := PreemptiveTruncate(req)
+	rounds := PreemptiveTruncate(req, nil)
 	if rounds != 0 {
 		t.Fatalf("image-heavy conversation should fit without truncation, got %d rounds", rounds)
 	}

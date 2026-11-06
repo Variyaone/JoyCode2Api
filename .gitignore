@@ -83,3 +83,7 @@ JoyCode2Api.new.exe
 probe-*.js
 probe-*.go
 手动部署-openclaw.bat
+
+# Local token issuing (never commit)
+tools/licgen/
+licgen_key.bin

@@ -13,8 +13,13 @@ const (
 	// negotiated upstream (200K or 1M), so this proxy floor applies only to
 	// non-native models.
 	contextWindowSize = 196608
-	// Safety margin: start truncation when estimated tokens exceed this ratio of contextWindowSize
-	preemptiveThresholdRatio = 0.85
+	// Proxy shrink threshold. Deliberately higher than the old 0.85: clients
+	// (Claude Code / desktop app) trigger their own native auto-compact when
+	// the reported input_tokens waterline rises, which preserves far more
+	// context than any proxy-side rewrite. The proxy now only steps in at
+	// ~95% — after the client has had its chance and the estimate says the
+	// request genuinely will not fit — plus on real upstream overflow errors.
+	preemptiveThresholdRatio = 0.95
 	// Rough approximation: 1 token ≈ 3.5 bytes for mixed Chinese/English code content
 	bytesPerToken = 3.5
 	// Maximum truncation rounds before giving up
@@ -284,18 +289,21 @@ func pixelDimsFromBase64(b64 string) (int, int) {
 }
 
 // PreemptiveTruncate checks if the request likely exceeds the model's context limit
-// and proactively truncates before sending. Returns the number of truncation
+// and proactively shrinks it before sending. Returns the number of shrink
 // rounds performed.
 //
-// It never rejects the request. When progressive truncation stalls (messages
-// down to the keep-floor but the estimate is still over — usually large tool
-// schemas or a huge tail message, which the estimator may over- or
-// under-count), it collapses the conversation to first-message + notice +
-// last two messages and lets the upstream be the final arbiter. If the
-// upstream still says the context is too large, the handlers' retry loops
-// surface that error with the real upstream message; refusing here on a rough
-// estimate produced false 400s for requests that would have succeeded.
-func PreemptiveTruncate(req *MessageRequest) int {
+// It never rejects the request. Each round first tries summary compression
+// (CompressMessages) — the preferred path, since a cached summary keeps the
+// same earlier-context view across turns — and falls back to hard truncation
+// when compression is unavailable or fails. When both stall (messages down to
+// the keep-floor but the estimate is still over — usually large tool schemas
+// or a huge tail message, which the estimator may over- or under-count), it
+// collapses the conversation to first-message + notice + last two messages and
+// lets the upstream be the final arbiter. If the upstream still says the
+// context is too large, the handlers' retry loops surface that error with the
+// real upstream message; refusing here on a rough estimate produced false 400s
+// for requests that would have succeeded.
+func PreemptiveTruncate(req *MessageRequest, s Summarizer) int {
 	window := float64(contextWindowSize)
 	ratio := float64(preemptiveThresholdRatio)
 	threshold := int(window * ratio)
@@ -305,12 +313,17 @@ func PreemptiveTruncate(req *MessageRequest) int {
 		estimated := estimateTokens(req)
 		if estimated <= threshold {
 			if rounds > 0 {
-				slog.Info("preemptive truncation complete", "rounds", rounds, "estimated_tokens", estimated, "threshold", threshold)
+				slog.Info("preemptive shrink complete", "rounds", rounds, "estimated_tokens", estimated, "threshold", threshold)
 			}
 			return rounds
 		}
+		if CompressMessages(req, s) {
+			rounds++
+			slog.Warn("preemptive compression round", "round", rounds, "estimated_tokens_before", estimated, "threshold", threshold)
+			continue
+		}
 		if !truncateMessages(req) {
-			slog.Warn("preemptive truncation stalled, sending minimal conversation and letting upstream decide",
+			slog.Warn("preemptive shrink stalled, sending minimal conversation and letting upstream decide",
 				"estimated_tokens", estimated, "threshold", threshold, "rounds", rounds)
 			truncateMessagesToFloor(req)
 			return rounds
@@ -319,7 +332,7 @@ func PreemptiveTruncate(req *MessageRequest) int {
 		slog.Warn("preemptive truncation round", "round", rounds, "estimated_tokens_before", estimated, "threshold", threshold)
 	}
 	if estimated := estimateTokens(req); estimated > threshold {
-		slog.Warn("preemptive truncation exhausted rounds; sending minimal conversation and letting upstream decide",
+		slog.Warn("preemptive shrink exhausted rounds; sending minimal conversation and letting upstream decide",
 			"estimated_tokens", estimated, "threshold", threshold)
 		truncateMessagesToFloor(req)
 	}

@@ -63,7 +63,7 @@ func TestResponsesMidTurnInstructionSurvivesTranslation(t *testing.T) {
 					{Role: role, Content: json.RawMessage(`"The user sent a new message while you were working:\nDELIVERY_MARKER"`)},
 				},
 			}
-			if PreemptiveTruncate(req) != 0 {
+			if PreemptiveTruncate(req, nil) != 0 {
 				t.Fatal("small request unexpectedly truncated")
 			}
 			body := joycode.ChatToResponses(TranslateRequest(req, "", ""))

@@ -120,11 +120,12 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 		h.handleNativeAnthropicNonStream(w, r, req, client, systemDefault)
 		return
 	}
-	// Preemptive truncation: estimate tokens and truncate before sending. It
-	// always sends something — estimates can miss tool schemas and fixed
-	// overhead, so the upstream (not the estimator) is the arbiter.
-	if rounds := PreemptiveTruncate(req); rounds > 0 {
-		slog.Warn("preemptive truncation applied (non-stream)", "rounds", rounds)
+	// Preemptive shrink: estimate tokens and compress/truncate before
+	// sending. It always sends something — estimates can miss tool schemas
+	// and fixed overhead, so the upstream (not the estimator) is the arbiter.
+	summarizer := NewChatSummarizer(client, systemDefault)
+	if rounds := PreemptiveTruncate(req, summarizer); rounds > 0 {
+		slog.Warn("preemptive shrink applied (non-stream)", "rounds", rounds)
 	}
 
 	jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
@@ -138,10 +139,10 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 			return client.PostStream("/api/saas/openai/v1/responses", joycode.ChatToResponses(jcBody))
 		}
 		resp, err := postResponses()
-		// Progressive truncation on context limit, same policy as the chat path.
+		// Progressive compression on context limit, truncation as fallback.
 		for truncRound := 0; err != nil && isContextLimitError(err.Error()) && truncRound < maxTruncationRounds; truncRound++ {
-			reqLog(r).Warn("responses (non-stream) context limit, truncating", "round", truncRound+1)
-			if !truncateMessages(req) {
+			reqLog(r).Warn("responses (non-stream) context limit, shrinking", "round", truncRound+1)
+			if !CompressMessages(req, summarizer) && !truncateMessages(req) {
 				break
 			}
 			resp, err = postResponses()
@@ -219,14 +220,19 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 				break
 			}
 			if isContextLimitError(lastErr.Error()) {
-				// Progressive truncation on context limit
+				// Progressive compression first, truncation as fallback.
+				if CompressMessages(req, summarizer) {
+					jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+					reqLog(r).Warn("retrying with compressed messages (non-stream)", "attempt", attempt)
+					continue
+				}
 				if truncateMessages(req) {
 					jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
 					reqLog(r).Warn("retrying with truncated messages (non-stream)", "attempt", attempt)
 					continue
 				}
-				reqLog(r).Warn("context limit exceeded, cannot truncate further")
-				writeAnthropicRequestError(w, "上下文长度超出模型限制，且无法进一步截断。请压缩对话历史或开启新对话。原始错误: "+lastErr.Error())
+				reqLog(r).Warn("context limit exceeded, cannot shrink further")
+				writeAnthropicRequestError(w, "上下文长度超出模型限制，且无法进一步压缩。请压缩对话历史或开启新对话。原始错误: "+lastErr.Error())
 				return
 			}
 			reqLog(r).Error("non-stream retry error", "attempt", attempt, "max", maxRetries, "error", lastErr)
@@ -346,11 +352,12 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 	jcBody["stream"] = true
 	logRequestDetails(r, "translated request (stream)", jcBody)
 
-	// Preemptive truncation: estimate tokens and truncate before sending. It
-	// always sends something — estimates are rough, so the upstream (not the
-	// estimator) is the arbiter; a true overflow is retried below.
-	if rounds := PreemptiveTruncate(req); rounds > 0 {
-		reqLog(r).Warn("preemptive truncation applied (stream)", "rounds", rounds)
+	// Preemptive shrink: estimate tokens and compress/truncate before
+	// sending. It always sends something — estimates are rough, so the
+	// upstream is the arbiter; a true overflow is retried below.
+	summarizer := NewChatSummarizer(client, systemDefault)
+	if rounds := PreemptiveTruncate(req, summarizer); rounds > 0 {
+		reqLog(r).Warn("preemptive shrink applied (stream)", "rounds", rounds)
 	}
 
 	jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
@@ -398,11 +405,12 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 		}
 	}()
 
-	// Connect with retry, progressive auto-truncate on context limit
+	// Connect with retry, progressive compression on context limit, truncation
+	// as fallback.
 	resp, err := h.connectStreamWithRetry(r, jcBody, client)
 	for truncRound := 0; err != nil && isContextLimitError(err.Error()) && truncRound < maxTruncationRounds; truncRound++ {
-		reqLog(r).Warn("stream context limit, truncating", "round", truncRound+1)
-		if !truncateMessages(req) {
+		reqLog(r).Warn("stream context limit, shrinking", "round", truncRound+1)
+		if !CompressMessages(req, summarizer) && !truncateMessages(req) {
 			break
 		}
 		jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
@@ -594,8 +602,9 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 	FormatSSE(w, "message_delta", sseMessageDelta{
 		Type: "message_delta", Delta: deltaStop{StopReason: stopReason},
 		Usage: struct {
+			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
-		}{OutputTokens: outputTokens},
+		}{InputTokens: streamInTk, OutputTokens: outputTokens},
 	})
 	FormatSSE(w, "message_stop", sseMessageStop{Type: "message_stop"})
 	flusher.Flush()
@@ -647,11 +656,12 @@ func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, 
 	}()
 
 	resp, err := client.PostStream("/api/saas/openai/v1/responses", body)
-	// Progressive truncation on context limit, same policy as the chat stream
-	// path. Only pings were sent so far, so the repair is invisible.
+	// Progressive compression on context limit, truncation as fallback.
+	// Only pings were sent so far, so the repair is invisible.
+	summarizer := NewChatSummarizer(client, systemDefault)
 	for truncRound := 0; err != nil && isContextLimitError(err.Error()) && truncRound < maxTruncationRounds; truncRound++ {
-		reqLog(r).Warn("responses stream context limit, truncating", "round", truncRound+1)
-		if !truncateMessages(req) {
+		reqLog(r).Warn("responses stream context limit, shrinking", "round", truncRound+1)
+		if !CompressMessages(req, summarizer) && !truncateMessages(req) {
 			break
 		}
 		jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
@@ -743,8 +753,9 @@ func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, 
 	FormatSSE(w, "message_delta", sseMessageDelta{
 		Type: "message_delta", Delta: deltaStop{StopReason: result.StopReason},
 		Usage: struct {
+			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
-		}{OutputTokens: result.Usage.OutputTokens},
+		}{InputTokens: result.Usage.InputTokens, OutputTokens: result.Usage.OutputTokens},
 	})
 	FormatSSE(w, "message_stop", sseMessageStop{Type: "message_stop"})
 	flusher.Flush()
@@ -783,6 +794,18 @@ func (h *Handler) handleNativeAnthropicStream(w http.ResponseWriter, r *http.Req
 	}()
 
 	resp, err := h.connectNativeAnthropicStreamWithRetry(r, body, client)
+	// Progressive compression on context limit — the native path previously
+	// had no overflow handling at all. Compression first, truncation as
+	// fallback; only SSE comment lines were sent so far, so invisible.
+	summarizer := NewChatSummarizer(client, systemDefault)
+	for truncRound := 0; err != nil && isContextLimitError(err.Error()) && truncRound < maxTruncationRounds; truncRound++ {
+		reqLog(r).Warn("native anthropic stream context limit, shrinking", "round", truncRound+1)
+		if !CompressMessages(req, summarizer) && !truncateMessages(req) {
+			break
+		}
+		body = TranslateAnthropicRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+		resp, err = h.connectNativeAnthropicStreamWithRetry(r, body, client)
+	}
 	// One-shot content repair while the client has only seen SSE comments:
 	// rejected thinking signatures / image inputs are recoverable by
 	// rewriting the history before any real event is emitted.
@@ -878,6 +901,18 @@ func (h *Handler) handleNativeAnthropicNonStream(w http.ResponseWriter, r *http.
 	logRequestDetails(r, "translated native anthropic request (non-stream)", body)
 
 	resp, err := h.connectNativeAnthropicStreamWithRetry(r, body, client)
+	// Progressive compression on context limit — the native path previously
+	// had no overflow handling at all. Nothing has been written to the client
+	// yet, so the shrink is invisible.
+	summarizer := NewChatSummarizer(client, systemDefault)
+	for truncRound := 0; err != nil && isContextLimitError(err.Error()) && truncRound < maxTruncationRounds; truncRound++ {
+		reqLog(r).Warn("native anthropic non-stream context limit, shrinking", "round", truncRound+1)
+		if !CompressMessages(req, summarizer) && !truncateMessages(req) {
+			break
+		}
+		body = TranslateAnthropicRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+		resp, err = h.connectNativeAnthropicStreamWithRetry(r, body, client)
+	}
 	// Same one-shot repair as the stream path: nothing has been written to
 	// the client yet, so fixing the history costs nothing observable.
 	if err != nil {

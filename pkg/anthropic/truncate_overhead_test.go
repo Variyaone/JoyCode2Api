@@ -51,7 +51,7 @@ func TestPreemptiveTruncate_NeverRejects(t *testing.T) {
 		Tools:    []Tool{{Name: "mcp_browser", Description: "browser automation", InputSchema: hugeSchema}},
 	}
 
-	rounds := PreemptiveTruncate(req)
+	rounds := PreemptiveTruncate(req, nil)
 	if rounds < 0 {
 		t.Fatal("PreemptiveTruncate must never reject; upstream arbitrates real limits")
 	}

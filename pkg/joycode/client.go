@@ -58,17 +58,29 @@ var colorEndpoints = map[string]colorEndpoint{
 
 var Models = []string{
 	"JoyAI-Code-1.5",
+	"JoyAI-Code-1.6",
 	"Claude-Opus-5",
 	"Claude-Opus-4.8",
 	"GLM-5.3",
 	"GLM-5.2-jcloud",
+	"JD-GLM-5.3",
+	"JD-GLM-5.2",
 	"Kimi-K3",
 	"Kimi-K3-jcloud",
+	"Kimi-K3.1-Pro-Highspeed",
+	"JD-Kimi-K3",
 	"DeepSeek-V4-Pro",
+	"DeepSeek-V4.1-Flash-1017",
+	"JD-DeepSeek-V4.1-Flash-1017",
+	"JD-DeepSeek-V4-Pro",
 	"MiniMax-M3",
+	"Qwen 3.8-Max",
+	"GPT-6.1 Sol",
+	"GPT-6 Sol",
 	"GPT-6 Astra",
 	"GPT-5.6 Sol",
 	"Doubao-Seed-2.0-pro",
+	"Doubao-Seed-Evolving",
 }
 
 // IsCompletionOnlyModel identifies upstream code-completion models. They must
