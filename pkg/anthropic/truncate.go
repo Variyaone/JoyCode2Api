@@ -490,10 +490,12 @@ func truncationNotice() MessageParam {
 // truncateMessagesToFloor collapses the conversation to its smallest legal
 // shape for the upstream: first message + truncation notice + the last two
 // messages (or all messages when there are fewer than four). Unlike
-// truncateMessages this always succeeds and ignores tool_use/tool_result
-// pairing at the boundary — it is the last-resort fallback, and an orphaned
-// trailing tool_result is handled by convertUserBlocks, which drops tool_use
-// blocks that have no result.
+// truncateMessages this always succeeds. Tail selection skips messages that
+// would translate to an empty or orphaned payload — a trailing
+// user(tool_result) whose tool_use was cut becomes an empty user message
+// under convertUserBlocks (its tool_result is stripped as orphaned), which
+// upstreams reject with code 1213 "未正常接收到prompt参数" — in favor of
+// the nearest messages that carry real content.
 func truncateMessagesToFloor(req *MessageRequest) {
 	n := len(req.Messages)
 	if n <= 4 {
@@ -504,11 +506,89 @@ func truncateMessagesToFloor(req *MessageRequest) {
 	if normalized[0].Role != "user" {
 		normalized[0].Role = "user"
 	}
-	kept := make([]MessageParam, 0, 4)
+
+	// Pick the tail from the end, skipping messages that carry no usable
+	// content upward: user messages consisting solely of tool_result blocks
+	// orphaned by the cut would translate to an empty user message.
+	tail := make([]MessageParam, 0, 2)
+	for i := n - 1; i >= 1 && len(tail) < 2; i-- {
+		if hasUsableTailContent(normalized[i], normalized[:i]) {
+			tail = append([]MessageParam{normalized[i]}, tail...)
+		}
+	}
+
+	// Degenerate fallback: nothing in the tail qualifies (e.g. the whole
+	// conversation is tool traffic). Keep the first message + notice so the
+	// upstream still receives a non-empty prompt; the estimator's caller has
+	// already decided the upstream is the final arbiter.
+	kept := make([]MessageParam, 0, 2+len(tail))
 	kept = append(kept, normalized[0])
 	kept = append(kept, truncationNotice())
-	kept = append(kept, normalized[n-2:]...)
+	kept = append(kept, tail...)
+	if len(tail) == 0 {
+		// Synthesize a minimal user turn so the request is never empty.
+		kept = append(kept, MessageParam{
+			Role:    "user",
+			Content: json.RawMessage(`"[System: conversation was truncated to fit the context window]"`),
+		})
+	}
 	slog.Warn("collapsing conversation to floor",
-		"original_count", n, "kept_first", 1, "kept_last", 2)
+		"original_count", n, "kept_first", 1, "kept_last", len(tail))
 	req.Messages = kept
+}
+
+// hasUsableTailContent reports whether a message translates to a non-empty
+// upstream payload when the messages before cutEnd (exclusive) are absent.
+func hasUsableTailContent(m MessageParam, before []MessageParam) bool {
+	// Everything other than user tool-result traffic is fine: assistant
+	// text/tool_use, system, plain strings.
+	if m.Role != "user" {
+		return true
+	}
+	var blocks []contentBlock
+	if json.Unmarshal(m.Content, &blocks) != nil {
+		// Plain string content — non-empty means usable.
+		var s string
+		return json.Unmarshal(m.Content, &s) != nil || strings.TrimSpace(s) != ""
+	}
+	// Block array: usable when it holds a text or image block, or a
+	// tool_result whose tool_use author still precedes the cut point (i.e.
+	// lives in `before`).
+	var ids map[string]bool
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			if strings.TrimSpace(b.Text) != "" {
+				return true
+			}
+		case "image":
+			return true
+		}
+	}
+	for _, b := range blocks {
+		if b.Type != "tool_result" || b.ToolUseID == "" {
+			continue
+		}
+		if ids == nil {
+			ids = make(map[string]bool)
+			for _, prev := range before {
+				if prev.Role != "assistant" {
+					continue
+				}
+				var prevBlocks []contentBlock
+				if json.Unmarshal(prev.Content, &prevBlocks) != nil {
+					continue
+				}
+				for _, pb := range prevBlocks {
+					if pb.Type == "tool_use" && pb.ID != "" {
+						ids[pb.ID] = true
+					}
+				}
+			}
+		}
+		if ids[b.ToolUseID] {
+			return true
+		}
+	}
+	return false
 }

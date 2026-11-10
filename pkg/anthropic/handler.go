@@ -219,6 +219,18 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 			if isThinkingSignatureError(lastErr.Error()) || isImageUnsupportedError(lastErr.Error()) {
 				break
 			}
+			if isUpstreamPromptError(lastErr.Error()) {
+				// Empty-prompt rejection (upstream 1213): drop messages that
+				// translate to an empty payload and retry. A floor-truncated
+				// conversation can leave an orphaned tool_result-only user
+				// message; an identical retry can only fail the same way.
+				if stripEmptyUserMessages(req) > 0 {
+					jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+					reqLog(r).Warn("upstream rejected empty prompt (1213), retrying without empty user messages (non-stream)", "attempt", attempt)
+					continue
+				}
+				break
+			}
 			if isContextLimitError(lastErr.Error()) {
 				// Progressive compression first, truncation as fallback.
 				if CompressMessages(req, summarizer) {
@@ -426,6 +438,12 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 		repaired := false
 		if isThinkingSignatureError(errMsg) && stripThinkingBlocks(req) > 0 {
 			reqLog(r).Warn("upstream rejected thinking signature, retrying without thinking blocks (stream)", "error", truncate(errMsg, 300))
+			repaired = true
+		} else if isUpstreamPromptError(errMsg) && stripEmptyUserMessages(req) > 0 {
+			// Empty-prompt rejection (upstream 1213): floor truncation can
+			// leave orphaned tool_result-only user messages that translate
+			// to {"content":""}; retry without them.
+			reqLog(r).Warn("upstream rejected empty prompt (1213), retrying without empty user messages (stream)", "error", truncate(errMsg, 300))
 			repaired = true
 		} else if isImageUnsupportedError(errMsg) && replaceUnsupportedImages(req) > 0 {
 			reqLog(r).Warn("upstream rejected image input, retrying with placeholders (stream)", "error", truncate(errMsg, 300))
@@ -1218,7 +1236,10 @@ func (h *Handler) connectStreamWithRetry(r *http.Request, jcBody map[string]inte
 			// Deterministic errors — retrying identically is pointless:
 			// content_filter goes straight to the caller, thinking-signature
 			// and image-input rejections go to the one-shot repair path.
+			// Empty-prompt rejection (upstream 1213) is deterministic too:
+			// the caller's repair loop strips empty user messages.
 			if strings.Contains(dataContent, "SENSITIVE_CONTENT") ||
+				isUpstreamPromptError(dataContent) ||
 				isThinkingSignatureError(dataContent) || isImageUnsupportedError(dataContent) {
 				return nil, lastErr
 			}

@@ -43,6 +43,91 @@ func isImageUnsupportedError(body string) bool {
 			strings.Contains(lower, "no vision"))
 }
 
+// isUpstreamPromptError reports whether an upstream error means the translated
+// request contained an empty / unusable prompt — GLM-family gateways' code 1213
+// "未正常接收到prompt参数". Observed trigger: truncation leaves a user message
+// whose blocks are all orphaned tool_results, translate.go converts it to
+// {"role":"user","content":""} and the upstream rejects the whole request.
+func isUpstreamPromptError(body string) bool {
+	return strings.Contains(body, "1213") ||
+		strings.Contains(body, "未正常接收到prompt参数")
+}
+
+// stripEmptyUserMessages removes user messages that translate to an empty
+// payload (no text, no image, only orphaned tool_result blocks) so a request
+// that hits code 1213 can be retried without them. Returns the number of
+// messages removed; 0 means nothing changed.
+func stripEmptyUserMessages(req *MessageRequest) int {
+	removed := 0
+	toolUseIDs := map[string]bool{}
+	for _, m := range req.Messages {
+		if m.Role != "assistant" {
+			continue
+		}
+		blocks, ok := decodeRawBlocks(m.Content)
+		if !ok {
+			continue
+		}
+		for _, b := range blocks {
+			if blockType(b) == "tool_use" {
+				var tb struct {
+					ID string `json:"id"`
+				}
+				if json.Unmarshal(b, &tb) == nil && tb.ID != "" {
+					toolUseIDs[tb.ID] = true
+				}
+			}
+		}
+	}
+	kept := req.Messages[:0:0]
+	for _, m := range req.Messages {
+		if m.Role == "user" && !userMessageHasPayload(m, toolUseIDs) {
+			removed++
+			continue
+		}
+		kept = append(kept, m)
+	}
+	if removed > 0 {
+		req.Messages = kept
+	}
+	return removed
+}
+
+// userMessageHasPayload reports whether a user message carries content that
+// survives translation: text, an image, or a tool_result whose author is
+// still in the conversation.
+func userMessageHasPayload(m MessageParam, toolUseIDs map[string]bool) bool {
+	var s string
+	if json.Unmarshal(m.Content, &s) == nil {
+		return strings.TrimSpace(s) != ""
+	}
+	blocks, ok := decodeRawBlocks(m.Content)
+	if !ok {
+		return len(m.Content) > 0
+	}
+	for _, b := range blocks {
+		switch blockType(b) {
+		case "text":
+			var tb struct {
+				Text string `json:"text"`
+			}
+			if json.Unmarshal(b, &tb) == nil && strings.TrimSpace(tb.Text) != "" {
+				return true
+			}
+		case "image":
+			return true
+		case "tool_result":
+			var trb struct {
+				ToolUseID string `json:"tool_use_id"`
+			}
+			if json.Unmarshal(b, &trb) == nil && trb.ToolUseID != "" && toolUseIDs[trb.ToolUseID] {
+				return true
+			}
+		}
+	}
+	return false
+}
+
 // stripThinkingBlocks removes thinking (and redacted_thinking) blocks from
 // every assistant message, keeping all other blocks verbatim. Returns the
 // number of blocks removed; 0 means nothing changed.
