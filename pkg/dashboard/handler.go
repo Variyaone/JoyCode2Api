@@ -82,6 +82,7 @@ func (h *Handler) RegisterRoutes(mux *http.ServeMux) {
 	mux.HandleFunc("/api/accounts-export", h.handleExportAccounts)
 	mux.HandleFunc("/api/accounts-import", h.handleImportAccounts)
 	mux.HandleFunc("/api/joyme/device-hints", h.handleJoymeDeviceHints)
+	mux.HandleFunc("/api/exit", h.handleExit)
 }
 
 // Repo Stars cache

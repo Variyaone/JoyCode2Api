@@ -92,19 +92,21 @@ var serveCmd = &cobra.Command{
 		srv := openai.NewServer(client, s)
 		anth := anthropic.NewHandler(client, s)
 
-		// Session integrity verifier: gates /v1/* API access on a locally
-		// validated session token. Compiled in for production builds; test
-		// builds (-tags testmode) skip it entirely.
+		// Session integrity verifier: gates /v1/* API access once armed.
+		// Dormant by default — with no manifest ever synced and no token
+		// imported, access is unrestricted, identical to an ungated build.
+		// Compiled in for production builds; test builds (-tags testmode)
+		// skip it entirely.
 		var guard *sessionguard.Verifier
 		if s != nil && sessionguard.GuardEnabled() {
 			guard = sessionguard.NewVerifier(s.GetSetting, s.SetSetting)
 			if d, ok := guard.Status(); ok {
-				log.Printf("Session integrity: verified (expires in %s)", d.Round(time.Hour))
+				log.Printf("Session integrity: armed (expires in %s)", d.Round(time.Hour))
 			} else {
-				log.Printf("Session integrity: not active — API access will require re-authentication")
+				log.Printf("Session integrity: dormant")
 			}
-			// Background manifest sync keeps the session renewed from the
-			// operator's published manifest without any local action.
+			// Background manifest sync: picks up the operator's published
+			// manifest automatically. No-op while the sync URL is unset.
 			guardCtx, guardCancel := context.WithCancel(cmd.Context())
 			defer guardCancel()
 			guard.StartManifestSync(guardCtx)
@@ -239,6 +241,11 @@ var serveCmd = &cobra.Command{
 			subFS, _ := fs.Sub(staticFiles, "static")
 			dash := dashboard.NewHandler(s, subFS, keeper)
 			dash.Version = Version
+			// Self-exit for no-admin upgrades: terminating the serve process
+			// lets the SYSTEM watchdog / supervisor restart it from the
+			// already-swapped binary. os.Exit(0) is the whole mechanism —
+			// the graceful-shutdown path below is unreachable by design here.
+			dashboard.ExitFunc = func() { os.Exit(0) }
 			dash.RegisterRoutes(mux)
 			mux.HandleFunc("/", dash.ServeStatic)
 		}
