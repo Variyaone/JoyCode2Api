@@ -399,6 +399,20 @@ func TestResolveModel_SpecificName(t *testing.T) {
 	}
 }
 
+// A model the upstream catalog publishes but the built-in list does not know
+// must not be silently rewritten to the account default.
+func TestResolveModel_UsesUpstreamCatalog(t *testing.T) {
+	joycode.InstallCatalog([]joycode.ModelInfo{
+		{Label: "Freshly-Published", ModelID: "Freshly-Published", ChatAPIModel: "freshly-published-id"},
+	})
+	defer joycode.InstallCatalog(nil)
+
+	result := ResolveModel("freshly-published-id", "Kimi-K3", "GLM-5.3")
+	if result != "freshly-published-id" {
+		t.Errorf("expected freshly-published-id, got %s", result)
+	}
+}
+
 // --- ModelCapabilities / ReasoningModels tests ---
 
 // Test 27: ReasoningModels map has expected entries

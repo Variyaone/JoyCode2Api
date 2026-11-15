@@ -25,6 +25,11 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, 400, fmt.Sprintf("请求体解析失败: %s。请检查请求是否完整，或尝试开启新对话减少上下文长度。", err.Error()))
 		return
 	}
+	client := s.getClient(r)
+	// Load the upstream model catalog before resolving the model: an id that
+	// upstream just published must not be rewritten to the account default.
+	client.EnsureCatalog()
+
 	systemDefault := ""
 	if s.store != nil {
 		systemDefault = s.store.GetSetting("default_model")
@@ -36,7 +41,6 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		writeError(w, http.StatusBadRequest, "JoyCode-Base-V3 是代码补全模型，不支持聊天/工具会话。请选择目录中的聊天模型；不会自动替换为其他模型。")
 		return
 	}
-	client := s.getClient(r)
 	if IsClaudeModel(model) {
 		s.handleClaudeChat(w, r, &req, model)
 		return

@@ -31,6 +31,21 @@ func TestResolveModel(t *testing.T) {
 	}
 }
 
+// A model the upstream catalog publishes but the built-in list does not know
+// must not be silently rewritten to the account default — the client asked
+// for that model by name.
+func TestResolveModelUsesUpstreamCatalog(t *testing.T) {
+	joycode.InstallCatalog([]joycode.ModelInfo{
+		{Label: "Freshly-Published", ModelID: "Freshly-Published", ChatAPIModel: "freshly-published-id"},
+	})
+	defer joycode.InstallCatalog(nil)
+
+	got := resolveModel("freshly-published-id", "Kimi-K3", "GLM-5.3")
+	if got != "freshly-published-id" {
+		t.Errorf("resolveModel = %q, want %q", got, "freshly-published-id")
+	}
+}
+
 func TestTranslateRequest(t *testing.T) {
 	temp := 0.7
 	req := &MessageRequest{

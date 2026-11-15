@@ -8,7 +8,7 @@
 
 [GitHub](https://github.com/variyaone/JoyCode2api-VABoost) · [Gitee（国内镜像）](https://gitee.com/variyaone/JoyCode2api-VABoost)
 
-`JoyAI-Code-1.5` · `Claude-Opus-5` · `Claude-Opus-4.8` · `GLM-5.3` · `GLM-5.2-jcloud` · `Kimi-K3` · `Kimi-K3-jcloud` · `DeepSeek-V4-Pro` · `MiniMax-M3` · `Doubao-Seed-2.0-pro` · `GPT-6 Astra` · `GPT-5.6 Sol`
+`JoyAI-Code-1.6` · `Claude-Opus-5` · `GLM-5.3` · `JD-GLM-5.3` · `GLM-5.3-jcloud` · `JD-GLM-5.2` · `Kimi-K3-jcloud` · `Kimi-K3.1-Pro-Highspeed` · `DeepSeek-V4-Pro` · `MiniMax-M3` · `Doubao-Seed-2.0-pro` · `GPT-6.1 Sol` · `GPT-6 Astra` · `GPT-5.6 Sol`
 
 [![Go](https://img.shields.io/badge/Go-1.25+-00ADD8?style=flat&logo=go)](https://go.dev/)
 [![React](https://img.shields.io/badge/React-19-61DAFB?style=flat&logo=react)](https://react.dev/)
@@ -255,6 +255,14 @@ Docker / 远程部署的正常现象。复制地址栏完整 URL，粘进 Dashbo
 <summary><b>GLM 的图标为什么是 Z.ai？</b></summary>
 
 智谱对外的品牌是 Z.ai（bigmodel.cn 同源），VABoost 用 Z.ai 标识 GLM 系列模型。
+</details>
+
+<details>
+<summary><b>选模型报 "当前模型不可用或已下线"（6001）怎么办？</b></summary>
+
+上游只认 `joycode_modelList` 里的 `chatApiModel`（如 `GLM-5.3-jcloud`），`JD-` 开头的是显示标签（如 `JD-GLM-5.3`），直接把标签发过去上游会回 6001。代理已自动翻译，两种写法都能用。
+
+如果连 id 也报 6001，说明该型号已被上游下线（例如 `Kimi-K3`，现在只有 `JD-Kimi-K3` 和 `Kimi-K3.1-Pro-Highspeed`），改用当前在售的型号即可。
 </details>
 
 ---

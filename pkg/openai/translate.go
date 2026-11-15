@@ -119,10 +119,11 @@ func ResolveModel(model string, accountDefault string, systemDefault string) str
 	if joycode.IsCompletionOnlyModel(model) {
 		return model
 	}
-	for _, m := range joycode.Models {
-		if m == model {
-			return model
-		}
+	// KnownModel covers the built-in list and the live upstream catalog, so
+	// an id upstream just published is not silently rewritten to the account
+	// default — the client would get a different model than it asked for.
+	if joycode.KnownModel(model) {
+		return model
 	}
 	if accountDefault != "" {
 		return accountDefault

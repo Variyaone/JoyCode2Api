@@ -75,6 +75,11 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 		req.MaxTokens = 32768
 	}
 
+	client := h.getClient(r)
+	// Load the upstream model catalog before resolving the model: an id that
+	// upstream just published must not be rewritten to the account default.
+	client.EnsureCatalog()
+
 	accountDefault := store.GetAccountDefaultModel(r)
 	systemDefault := ""
 	if h.store != nil {
@@ -101,8 +106,6 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 		reqLog(r).Info("stripped image blocks for text-only model", "model", resolved, "replaced", n)
 	}
 	reqLog(r).Info("anthropic request", "model", req.Model, "resolved", resolved, "stream", req.Stream, "max_tokens", req.MaxTokens, "messages", len(req.Messages), "tools", len(req.Tools))
-
-	client := h.getClient(r)
 
 	if req.Stream {
 		h.handleStream(w, r, &req, client)

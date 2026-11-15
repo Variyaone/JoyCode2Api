@@ -62,14 +62,20 @@ var Models = []string{
 	"Claude-Opus-5",
 	"Claude-Opus-4.8",
 	"GLM-5.3",
+	// Upstream ids (joycode_modelList "chatApiModel"). The JD- prefixed
+	// entries below are the display labels for these same deployments;
+	// upstream only accepts the ids when calling the chat endpoint.
+	"GLM-5.3-jcloud",
 	"GLM-5.2-jcloud",
 	"JD-GLM-5.3",
 	"JD-GLM-5.2",
 	"Kimi-K3",
 	"Kimi-K3-jcloud",
+	"Kimi-K3.1",
 	"Kimi-K3.1-Pro-Highspeed",
 	"JD-Kimi-K3",
 	"DeepSeek-V4-Pro",
+	"DeepSeek-V4.1-Flash",
 	"DeepSeek-V4.1-Flash-1017",
 	"JD-DeepSeek-V4.1-Flash-1017",
 	"JD-DeepSeek-V4-Pro",
@@ -302,6 +308,14 @@ func (c *Client) prepareBody(extra map[string]interface{}) map[string]interface{
 	for k, v := range extra {
 		body[k] = v
 	}
+	// The upstream chat endpoint accepts only the published model id
+	// (joycode_modelList "chatApiModel"); the display labels such as
+	// "JD-GLM-5.3" are rejected with code 6001 ("当前模型不可用或已下线").
+	// Translate here — the last point before the wire — so every caller
+	// reaches the same deployment whichever spelling it used.
+	if m, ok := body["model"].(string); ok && m != "" {
+		body["model"] = ResolveUpstream(m)
+	}
 	return body
 }
 
@@ -321,6 +335,11 @@ func (c *Client) prepareAnthropicBody(extra map[string]interface{}) map[string]i
 	}
 	for k, v := range extra {
 		body[k] = v
+	}
+	// Same label -> id translation as the chat path: "Claude-Opus-5" is
+	// published as "Claude-Opus-5-hq" and the bare label returns 6002.
+	if m, ok := body["model"].(string); ok && m != "" {
+		body["model"] = ResolveUpstream(m)
 	}
 	return body
 }

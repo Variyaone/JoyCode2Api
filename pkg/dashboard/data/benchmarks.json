@@ -325,6 +325,22 @@
       ]
     },
     {
+      "id": "GLM-5.3-jcloud",
+      "mapping": "deployment_reference",
+      "note": "上游 modelList 里 JD-GLM-5.3 部署的 id；只有公开 GLM-5.3 参考成绩，未证明 jcloud 部署版本、推理参数与其相同，不进入排名。",
+      "results": [
+        {
+          "source_id": "aa",
+          "public_model": "GLM-5.3",
+          "variant": "max",
+          "score": 45,
+          "url": "https://artificialanalysis.ai/models/glm-5-3",
+          "published_at": null,
+          "footnote": "公开基础模型成绩；不是 jcloud 通道实测。"
+        }
+      ]
+    },
+    {
       "id": "Kimi-K3-jcloud",
       "mapping": "deployment_reference",
       "note": "只有公开基础模型参考分，不能直接当成 jcloud 部署成绩。",
@@ -418,6 +434,12 @@
       "results": []
     },
     {
+      "id": "Kimi-K3.1",
+      "mapping": "unverified",
+      "note": "上游 modelList 里 Kimi-K3.1-Pro-Highspeed 部署的 id；公开评测尚未核对；分数待补。",
+      "results": []
+    },
+    {
       "id": "JD-Kimi-K3",
       "mapping": "unverified",
       "note": "新入库模型，公开评测尚未核对；分数待补。",
@@ -427,6 +449,12 @@
       "id": "DeepSeek-V4.1-Flash-1017",
       "mapping": "unverified",
       "note": "新入库模型，公开评测尚未核对；分数待补。",
+      "results": []
+    },
+    {
+      "id": "DeepSeek-V4.1-Flash",
+      "mapping": "unverified",
+      "note": "上游 modelList 里 DeepSeek-V4.1-Flash-1017 部署的 id；公开评测尚未核对；分数待补。",
       "results": []
     },
     {
