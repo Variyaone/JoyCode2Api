@@ -404,8 +404,15 @@ func convertUserBlocks(blocks []contentBlock, toolUseIDs map[string]bool) []map[
 		})
 	}
 
-	// If no tool_result blocks, return as single user message
+	// If no tool_result blocks, return as single user message. When the
+	// message carries no text and no image (all blocks were orphaned
+	// tool_results, or text blocks were empty), emit nothing: an empty
+	// "content":"" user message is rejected by upstreams with code 1213
+	// ("未正常接收到prompt参数").
 	if len(result) == 0 {
+		if !hasUserContent {
+			return nil
+		}
 		return []map[string]interface{}{{"role": "user", "content": userContent}}
 	}
 

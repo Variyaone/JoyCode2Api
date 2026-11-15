@@ -1,41 +1,309 @@
 package anthropic
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"log/slog"
+	"strings"
 )
 
 const (
-	// Upstream model context window size (JoyCode's ModelArts limit)
+	// Upstream model context window size (JoyCode's ModelArts limit).
+	// JoyAI/OpenAI-family paths are capped at 192K; native Claude paths are
+	// negotiated upstream (200K or 1M), so this proxy floor applies only to
+	// non-native models.
 	contextWindowSize = 196608
-	// Safety margin: start truncation when estimated tokens exceed this ratio of contextWindowSize
-	preemptiveThresholdRatio = 0.85
+	// Proxy shrink threshold. Deliberately higher than the old 0.85: clients
+	// (Claude Code / desktop app) trigger their own native auto-compact when
+	// the reported input_tokens waterline rises, which preserves far more
+	// context than any proxy-side rewrite. The proxy now only steps in at
+	// ~95% — after the client has had its chance and the estimate says the
+	// request genuinely will not fit — plus on real upstream overflow errors.
+	preemptiveThresholdRatio = 0.95
 	// Rough approximation: 1 token ≈ 3.5 bytes for mixed Chinese/English code content
 	bytesPerToken = 3.5
 	// Maximum truncation rounds before giving up
 	maxTruncationRounds = 5
+	// Image patch constants. Vision models charge per image via a base + N
+	// patches. Using OpenAI/Anthropic conventions: 85 base + 170/patch.
+	// Cap each image so a screenshot-heavy conversation stays truncatable.
+	imageBaseTokens   = 85
+	imagePatchToken   = 170
+	imagePatchPixels  = 512
+	maxTokensPerImage = imageBaseTokens + imagePatchToken*25 // ~4K screenshot
 )
 
-// estimateTokens gives a rough token count estimate for the request messages.
-// Uses byte-length / bytesPerToken as approximation. Overestimates slightly which is safe.
+// estimateTokens gives a rough token count estimate for the whole request.
+// Uses byte-length / bytesPerToken as approximation for text content.
+// Image blocks are estimated by patch count (OpenAI/Anthropic convention)
+// instead of by raw base64 byte length, so a screenshot-heavy turn estimates
+// in the thousands of tokens rather than hundreds of thousands.
+//
+// The estimate includes the untruncatable fixed overhead: the system prompt
+// and every tool description + input_schema. A workflow session that loads a
+// browser MCP (Playwright/Chrome DevTools) can ship 30K+ tokens of schema
+// alone; without counting it the preemptive pass believes a request is small
+// while the upstream is already over its window, and it also undercounts what
+// remains after messages have been cut to the floor.
 func estimateTokens(req *MessageRequest) int {
-	totalBytes := 0
+	totalBytes := int64(0)
+	imageTokens := 0
 	if req.System != nil {
-		totalBytes += len(req.System)
+		totalBytes += int64(len(req.System))
 	}
 	for _, m := range req.Messages {
-		totalBytes += len(m.Content)
+		contentBytes, imgTokens := estimateMessageTokens(m.Content)
+		totalBytes += contentBytes
+		imageTokens += imgTokens
 	}
-	if totalBytes == 0 {
+	totalBytes += estimateToolsBytes(req.Tools)
+	if totalBytes == 0 && imageTokens == 0 {
 		return 0
 	}
-	return int(float64(totalBytes) / bytesPerToken)
+	return int(float64(totalBytes)/bytesPerToken) + imageTokens
+}
+
+// estimateToolsBytes approximates the serialized size of the tool list.
+// Anthropic InputSchema is arbitrary JSON; the name + description + schema all
+// ride along on every upstream call, so they count against the context window.
+func estimateToolsBytes(tools []Tool) int64 {
+	var n int64
+	for _, t := range tools {
+		n += int64(len(t.Name) + len(t.Description) + len(t.InputSchema))
+	}
+	return n
+}
+
+// estimateMessageTokens splits a message's content into text-byte cost and
+// vision-token cost. Content may be a plain string, a JSON array of blocks,
+// or (for provider errors) arbitrary JSON.
+func estimateMessageTokens(raw json.RawMessage) (textBytes int64, imageTokens int) {
+	// Fast path: plain string content.
+	var s string
+	if err := json.Unmarshal(raw, &s); err == nil {
+		return int64(len(s)), 0
+	}
+
+	// Array of content blocks.
+	var blocks []contentBlock
+	if err := json.Unmarshal(raw, &blocks); err != nil {
+		slog.Debug("estimateMessageTokens: unmarshal blocks failed, using raw byte length",
+			"err", err,
+			"raw_len", len(raw),
+		)
+		// Unknown shape — fall back to raw length (old behaviour).
+		return int64(len(raw)), 0
+	}
+
+	for _, b := range blocks {
+		tb, it := estimateBlockTokens(b)
+		textBytes += tb
+		imageTokens += it
+	}
+	return textBytes, imageTokens
+}
+
+// estimateBlockTokens handles a single content block, recursing into nested
+// tool_result content (which can hold images, strings, or further block arrays).
+func estimateBlockTokens(b contentBlock) (textBytes int64, imageTokens int) {
+	switch b.Type {
+	case "image":
+		return 0, estimateImageTokens(b.Source)
+	case "tool_result":
+		return estimateToolResultTokens(b.Content)
+	default:
+		// text, tool_use, thinking, etc. — count the serialised size.
+		if jb, err := json.Marshal(b); err == nil {
+			return int64(len(jb)), 0
+		}
+	}
+	return 0, 0
+}
+
+// estimateToolResultTokens walks a tool_result's content payload. Anthropic
+// allows string, or array of {type:text|image|...} blocks; tool output often
+// carries image blocks here (Read/screenshot). Unknown shapes fall back to
+// raw-length estimation so we never silently zero out.
+func estimateToolResultTokens(content json.RawMessage) (textBytes int64, imageTokens int) {
+	if len(content) == 0 {
+		return 0, 0
+	}
+	// Identical shape handling as a full message: string, block array, or raw.
+	return estimateMessageTokens(content)
+}
+
+// estimateImageTokens converts an Anthropic image block source into an
+// approximate vision-token cost. Base64 sources carry no intrinsic pixel
+// dimensions, so we infer a scale from the decoded payload size relative to
+// a typical screenshot (~300KB base64 ≈ 1080p) and cap the result. URL data
+// sources decode in-place; plain-URL sources fall back to the max patch cap
+// because we cannot inspect the remote payload synchronously.
+func estimateImageTokens(source json.RawMessage) int {
+	if len(source) == 0 {
+		return maxTokensPerImage
+	}
+	var src struct {
+		Type      string `json:"type"`
+		MediaType string `json:"media_type"`
+		Data      string `json:"data"`
+		URL       string `json:"url"`
+	}
+	if err := json.Unmarshal(source, &src); err != nil {
+		return maxTokensPerImage
+	}
+
+	var payloadBase64 string
+	switch src.Type {
+	case "base64":
+		payloadBase64 = src.Data
+	case "url":
+		// data:image/...;base64,XXXX — strip the prefix and treat like base64.
+		const marker = ";base64,"
+		if idx := strings.Index(src.URL, marker); idx >= 0 {
+			payloadBase64 = src.URL[idx+len(marker):]
+		} else {
+			return maxTokensPerImage
+		}
+	default:
+		return maxTokensPerImage
+	}
+
+	if len(payloadBase64) == 0 {
+		return maxTokensPerImage
+	}
+
+	// Approximate decoded image payload size (base64 inflates by 4/3).
+	decodedBytes := int64(len(payloadBase64)) * 3 / 4
+	if decodedBytes == 0 {
+		return maxTokensPerImage
+	}
+
+	// Decode actual pixel dimensions from the image header — this avoids the
+	// encoding-format sensitivity of byte-size calibration (raw BMP payloads
+	// would otherwise overcount 4-6x vs the same PNG image).
+	if w, h := pixelDimsFromBase64(payloadBase64); w > 0 && h > 0 {
+		// Cap pixels to prevent integer overflow on enormous inputs
+		const maxDim = 100000
+		if w > maxDim {
+			w = maxDim
+		}
+		if h > maxDim {
+			h = maxDim
+		}
+		xTiles := (w + imagePatchPixels - 1) / imagePatchPixels
+		yTiles := (h + imagePatchPixels - 1) / imagePatchPixels
+		patches := xTiles * yTiles
+		tokens := imageBaseTokens + imagePatchToken*patches
+		if tokens > maxTokensPerImage {
+			tokens = maxTokensPerImage
+		}
+		return tokens
+	}
+
+	// Fallback: unknown format → assume heavy; cap.
+	return maxTokensPerImage
+}
+
+// pixelDimsFromBase64 extracts width/height from a base64-encoded image
+// without a full decode. We decode up to 64KB of base64 (≈48KB decoded) to
+// cover JPEG APP1 EXIF segments that phone-camera photos commonly pad to
+// 30-64KB before SOF0; PNG/BMP header parsing stays within the first bytes.
+// Returns (0, 0) for unrecognised formats; callers fall back to a cap.
+func pixelDimsFromBase64(b64 string) (int, int) {
+	const maxScan = 65536
+	if len(b64) > maxScan {
+		b64 = b64[:maxScan]
+	}
+	raw, err := base64.StdEncoding.DecodeString(b64)
+	if err != nil {
+		// Padding stripped mid-chunk: pad and retry the longest 4-aligned prefix.
+		trim := len(b64) - (len(b64) % 4)
+		if trim < 24 {
+			return 0, 0
+		}
+		raw, err = base64.StdEncoding.DecodeString(b64[:trim])
+		if err != nil {
+			return 0, 0
+		}
+	}
+	if len(raw) < 4 {
+		return 0, 0
+	}
+
+	// PNG: 89 50 4E 47 0D 0A 1A 0A | IHDR(13 bytes from offset 8): len(4) "IHDR" W(4) H(4)
+	if len(raw) >= 24 && raw[0] == 0x89 && raw[1] == 0x50 && raw[2] == 0x4E && raw[3] == 0x47 {
+		if string(raw[12:16]) != "IHDR" {
+			return 0, 0
+		}
+		w := int(raw[16])<<24 | int(raw[17])<<16 | int(raw[18])<<8 | int(raw[19])
+		h := int(raw[20])<<24 | int(raw[21])<<16 | int(raw[22])<<8 | int(raw[23])
+		return w, h
+	}
+
+	// BMP: 42 4D ("BM") + width(4 signed LE @18) + height(4 signed LE @22).
+	// Negative height = top-down bitmap.
+	if len(raw) >= 26 && raw[0] == 0x42 && raw[1] == 0x4D {
+		w := int32(raw[18]) | int32(raw[19])<<8 | int32(raw[20])<<16 | int32(raw[21])<<24
+		h := int32(raw[22]) | int32(raw[23])<<8 | int32(raw[24])<<16 | int32(raw[25])<<24
+		if h < 0 {
+			h = -h
+		}
+		if w < 0 {
+			w = -w
+		}
+		return int(w), int(h)
+	}
+
+	// JPEG: FF D8, then scan for SOF0/SOF1/SOF2 (FF C0/C1/C2) whose body starts
+	// with precision(1) H(2) W(2). Need i+8 within bounds to read W.
+	if len(raw) >= 9 && raw[0] == 0xFF && raw[1] == 0xD8 {
+		for i := 2; i+8 < len(raw); {
+			if raw[i] != 0xFF {
+				i++
+				continue
+			}
+			marker := raw[i+1]
+			// ITU T.81 permits any number of 0xFF fill bytes before a marker,
+			// and stuffed FF 00 sequences appear inside scan data; skip them.
+			if marker == 0xFF || marker == 0x00 {
+				i++
+				continue
+			}
+			if marker == 0xC0 || marker == 0xC1 || marker == 0xC2 {
+				h := int(raw[i+5])<<8 | int(raw[i+6])
+				w := int(raw[i+7])<<8 | int(raw[i+8])
+				return w, h
+			}
+			if i+4 > len(raw) {
+				break
+			}
+			segLen := int(raw[i+2])<<8 | int(raw[i+3])
+			if segLen < 2 {
+				break
+			}
+			i += 2 + segLen
+		}
+		return 0, 0
+	}
+	return 0, 0
 }
 
 // PreemptiveTruncate checks if the request likely exceeds the model's context limit
-// and proactively truncates before sending. Returns the number of truncation rounds performed.
-// Returns -1 if truncation failed to bring estimated tokens below threshold.
-func PreemptiveTruncate(req *MessageRequest) int {
+// and proactively shrinks it before sending. Returns the number of shrink
+// rounds performed.
+//
+// It never rejects the request. Each round first tries summary compression
+// (CompressMessages) — the preferred path, since a cached summary keeps the
+// same earlier-context view across turns — and falls back to hard truncation
+// when compression is unavailable or fails. When both stall (messages down to
+// the keep-floor but the estimate is still over — usually large tool schemas
+// or a huge tail message, which the estimator may over- or under-count), it
+// collapses the conversation to first-message + notice + last two messages and
+// lets the upstream be the final arbiter. If the upstream still says the
+// context is too large, the handlers' retry loops surface that error with the
+// real upstream message; refusing here on a rough estimate produced false 400s
+// for requests that would have succeeded.
+func PreemptiveTruncate(req *MessageRequest, s Summarizer) int {
 	window := float64(contextWindowSize)
 	ratio := float64(preemptiveThresholdRatio)
 	threshold := int(window * ratio)
@@ -45,21 +313,28 @@ func PreemptiveTruncate(req *MessageRequest) int {
 		estimated := estimateTokens(req)
 		if estimated <= threshold {
 			if rounds > 0 {
-				slog.Info("preemptive truncation complete", "rounds", rounds, "estimated_tokens", estimated, "threshold", threshold)
+				slog.Info("preemptive shrink complete", "rounds", rounds, "estimated_tokens", estimated, "threshold", threshold)
 			}
 			return rounds
 		}
+		if CompressMessages(req, s) {
+			rounds++
+			slog.Warn("preemptive compression round", "round", rounds, "estimated_tokens_before", estimated, "threshold", threshold)
+			continue
+		}
 		if !truncateMessages(req) {
-			slog.Warn("preemptive truncation: cannot truncate further", "estimated_tokens", estimated, "threshold", threshold, "rounds", rounds)
-			return -1
+			slog.Warn("preemptive shrink stalled, sending minimal conversation and letting upstream decide",
+				"estimated_tokens", estimated, "threshold", threshold, "rounds", rounds)
+			truncateMessagesToFloor(req)
+			return rounds
 		}
 		rounds++
 		slog.Warn("preemptive truncation round", "round", rounds, "estimated_tokens_before", estimated, "threshold", threshold)
 	}
-	// Check if we actually got below threshold
-	if estimateTokens(req) > threshold {
-		slog.Warn("preemptive truncation exhausted rounds without reaching threshold")
-		return -1
+	if estimated := estimateTokens(req); estimated > threshold {
+		slog.Warn("preemptive shrink exhausted rounds; sending minimal conversation and letting upstream decide",
+			"estimated_tokens", estimated, "threshold", threshold)
+		truncateMessagesToFloor(req)
 	}
 	return rounds
 }
@@ -185,15 +460,10 @@ func truncateMessages(req *MessageRequest) bool {
 	}
 
 	removed := cutEnd - keepFirst
-	notice := "[System: Earlier conversation messages have been auto-truncated to fit within the model's context window. Some earlier context is now missing. Continue with the remaining conversation.]"
-	noticeBytes, _ := json.Marshal(notice)
 
 	var truncated []MessageParam
 	truncated = append(truncated, req.Messages[:keepFirst]...)
-	truncated = append(truncated, MessageParam{
-		Role:    "assistant",
-		Content: json.RawMessage(noticeBytes),
-	})
+	truncated = append(truncated, truncationNotice())
 	truncated = append(truncated, req.Messages[cutEnd:]...)
 
 	slog.Warn("auto-truncated messages for context limit",
@@ -206,4 +476,119 @@ func truncateMessages(req *MessageRequest) bool {
 
 	req.Messages = truncated
 	return true
+}
+
+func truncationNotice() MessageParam {
+	notice := "[System: Earlier conversation messages have been auto-truncated to fit within the model's context window. Some earlier context is now missing. Continue with the remaining conversation.]"
+	noticeBytes, _ := json.Marshal(notice)
+	return MessageParam{
+		Role:    "assistant",
+		Content: json.RawMessage(noticeBytes),
+	}
+}
+
+// truncateMessagesToFloor collapses the conversation to its smallest legal
+// shape for the upstream: first message + truncation notice + the last two
+// messages (or all messages when there are fewer than four). Unlike
+// truncateMessages this always succeeds. Tail selection skips messages that
+// would translate to an empty or orphaned payload — a trailing
+// user(tool_result) whose tool_use was cut becomes an empty user message
+// under convertUserBlocks (its tool_result is stripped as orphaned), which
+// upstreams reject with code 1213 "未正常接收到prompt参数" — in favor of
+// the nearest messages that carry real content.
+func truncateMessagesToFloor(req *MessageRequest) {
+	n := len(req.Messages)
+	if n <= 4 {
+		return
+	}
+	normalized := make([]MessageParam, len(req.Messages))
+	copy(normalized, req.Messages)
+	if normalized[0].Role != "user" {
+		normalized[0].Role = "user"
+	}
+
+	// Pick the tail from the end, skipping messages that carry no usable
+	// content upward: user messages consisting solely of tool_result blocks
+	// orphaned by the cut would translate to an empty user message.
+	tail := make([]MessageParam, 0, 2)
+	for i := n - 1; i >= 1 && len(tail) < 2; i-- {
+		if hasUsableTailContent(normalized[i], normalized[:i]) {
+			tail = append([]MessageParam{normalized[i]}, tail...)
+		}
+	}
+
+	// Degenerate fallback: nothing in the tail qualifies (e.g. the whole
+	// conversation is tool traffic). Keep the first message + notice so the
+	// upstream still receives a non-empty prompt; the estimator's caller has
+	// already decided the upstream is the final arbiter.
+	kept := make([]MessageParam, 0, 2+len(tail))
+	kept = append(kept, normalized[0])
+	kept = append(kept, truncationNotice())
+	kept = append(kept, tail...)
+	if len(tail) == 0 {
+		// Synthesize a minimal user turn so the request is never empty.
+		kept = append(kept, MessageParam{
+			Role:    "user",
+			Content: json.RawMessage(`"[System: conversation was truncated to fit the context window]"`),
+		})
+	}
+	slog.Warn("collapsing conversation to floor",
+		"original_count", n, "kept_first", 1, "kept_last", len(tail))
+	req.Messages = kept
+}
+
+// hasUsableTailContent reports whether a message translates to a non-empty
+// upstream payload when the messages before cutEnd (exclusive) are absent.
+func hasUsableTailContent(m MessageParam, before []MessageParam) bool {
+	// Everything other than user tool-result traffic is fine: assistant
+	// text/tool_use, system, plain strings.
+	if m.Role != "user" {
+		return true
+	}
+	var blocks []contentBlock
+	if json.Unmarshal(m.Content, &blocks) != nil {
+		// Plain string content — non-empty means usable.
+		var s string
+		return json.Unmarshal(m.Content, &s) != nil || strings.TrimSpace(s) != ""
+	}
+	// Block array: usable when it holds a text or image block, or a
+	// tool_result whose tool_use author still precedes the cut point (i.e.
+	// lives in `before`).
+	var ids map[string]bool
+	for _, b := range blocks {
+		switch b.Type {
+		case "text":
+			if strings.TrimSpace(b.Text) != "" {
+				return true
+			}
+		case "image":
+			return true
+		}
+	}
+	for _, b := range blocks {
+		if b.Type != "tool_result" || b.ToolUseID == "" {
+			continue
+		}
+		if ids == nil {
+			ids = make(map[string]bool)
+			for _, prev := range before {
+				if prev.Role != "assistant" {
+					continue
+				}
+				var prevBlocks []contentBlock
+				if json.Unmarshal(prev.Content, &prevBlocks) != nil {
+					continue
+				}
+				for _, pb := range prevBlocks {
+					if pb.Type == "tool_use" && pb.ID != "" {
+						ids[pb.ID] = true
+					}
+				}
+			}
+		}
+		if ids[b.ToolUseID] {
+			return true
+		}
+	}
+	return false
 }

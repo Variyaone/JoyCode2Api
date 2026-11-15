@@ -43,8 +43,12 @@ func TestAnthropicImageBlockForwardedToUpstream(t *testing.T) {
 	mux := http.NewServeMux()
 	h.RegisterRoutes(mux)
 
+	// Kimi-K3: a catalog model that is NOT in KnownTextOnlyModels and not a
+	// native-Claude model. Out-of-catalog names (e.g. the old "GLM-5.1") fall
+	// back to the default model (JoyAI-Code-1.5, text-only), which legitimately
+	// strips images; native Claude models route through a different path.
 	reqBody := `{
-		"model": "GLM-5.1",
+		"model": "Kimi-K3",
 		"stream": true,
 		"max_tokens": 64,
 		"messages": [

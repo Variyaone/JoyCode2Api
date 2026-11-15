@@ -94,6 +94,12 @@ func (h *Handler) handleMessages(w http.ResponseWriter, r *http.Request) {
 		writeAnthropicRequestError(w, fmt.Sprintf("thinking.budget_tokens (%d) 必须小于有效 max_tokens (%d，兼容上限 32768)。请显式降低 budget_tokens；请求未发送到上游。", req.Thinking.BudgetTokens, req.MaxTokens))
 		return
 	}
+	// Preemptive image stripping for confirmed text-only models (registry in
+	// pkg/joycode). Vision-capable and unknown models keep their images; a
+	// hard upstream image rejection still gets the one-shot fallback retry.
+	if n := StripImagesForTextOnlyModel(&req, resolved); n > 0 {
+		reqLog(r).Info("stripped image blocks for text-only model", "model", resolved, "replaced", n)
+	}
 	reqLog(r).Info("anthropic request", "model", req.Model, "resolved", resolved, "stream", req.Stream, "max_tokens", req.MaxTokens, "messages", len(req.Messages), "tools", len(req.Tools))
 
 	client := h.getClient(r)
@@ -114,12 +120,12 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 		h.handleNativeAnthropicNonStream(w, r, req, client, systemDefault)
 		return
 	}
-	// Preemptive truncation: estimate tokens and truncate before sending
-	if rounds := PreemptiveTruncate(req); rounds < 0 {
-		writeAnthropicRequestError(w, "上下文过长，自动截断后仍超出限制，请使用 /compact 或开启新对话。")
-		return
-	} else if rounds > 0 {
-		slog.Warn("preemptive truncation applied (non-stream)", "rounds", rounds)
+	// Preemptive shrink: estimate tokens and compress/truncate before
+	// sending. It always sends something — estimates can miss tool schemas
+	// and fixed overhead, so the upstream (not the estimator) is the arbiter.
+	summarizer := NewChatSummarizer(client, systemDefault)
+	if rounds := PreemptiveTruncate(req, summarizer); rounds > 0 {
+		slog.Warn("preemptive shrink applied (non-stream)", "rounds", rounds)
 	}
 
 	jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
@@ -127,19 +133,50 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 	if joycode.IsResponsesAPIModel(resolveModel(req.Model, store.GetAccountDefaultModel(r), systemDefault)) {
 		// The upstream always returns SSE even for stream:false, so stream and
 		// aggregate into a single Anthropic message.
-		jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
-		jcBody["stream"] = true
-		respBody := joycode.ChatToResponses(jcBody)
-		resp, err := client.PostStream("/api/saas/openai/v1/responses", respBody)
+		postResponses := func() (*http.Response, error) {
+			jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+			jcBody["stream"] = true
+			return client.PostStream("/api/saas/openai/v1/responses", joycode.ChatToResponses(jcBody))
+		}
+		resp, err := postResponses()
+		// Progressive compression on context limit, truncation as fallback.
+		for truncRound := 0; err != nil && isContextLimitError(err.Error()) && truncRound < maxTruncationRounds; truncRound++ {
+			reqLog(r).Warn("responses (non-stream) context limit, shrinking", "round", truncRound+1)
+			if !CompressMessages(req, summarizer) && !truncateMessages(req) {
+				break
+			}
+			resp, err = postResponses()
+		}
+		if err != nil && isContextLimitError(err.Error()) {
+			truncateMessagesToFloor(req)
+			resp, err = postResponses()
+		}
 		if err != nil {
-			reqLog(r).Error("responses (non-stream) upstream error", "error", err)
-			msg := err.Error()
-			if isTimeoutError(err) {
-				writeAnthropicError(w, 504, "上游服务响应超时，请稍后重试。原始错误: "+msg)
+			// One-shot content repair before anything reaches the client.
+			errMsg := err.Error()
+			if isThinkingSignatureError(errMsg) && stripThinkingBlocks(req) > 0 {
+				reqLog(r).Warn("upstream rejected thinking signature, retrying without thinking blocks (responses non-stream)", "error", truncate(errMsg, 300))
+			} else if isImageUnsupportedError(errMsg) && replaceUnsupportedImages(req) > 0 {
+				reqLog(r).Warn("upstream rejected image input, retrying with placeholders (responses non-stream)", "error", truncate(errMsg, 300))
+			} else {
+				reqLog(r).Error("responses (non-stream) upstream error", "error", err)
+				msg := errMsg
+				if isTimeoutError(err) {
+					writeAnthropicError(w, 504, "上游服务响应超时，请稍后重试。原始错误: "+msg)
+					return
+				}
+				if isContextLimitError(msg) {
+					writeAnthropicRequestError(w, "上下文长度超出模型限制，已尝试自动截断但仍无法满足。请压缩对话历史或开启新对话。原始错误: "+msg)
+					return
+				}
+				writeAnthropicError(w, 500, msg)
 				return
 			}
-			writeAnthropicError(w, 500, msg)
-			return
+			resp, err = postResponses()
+			if err != nil {
+				writeAnthropicError(w, 500, err.Error())
+				return
+			}
 		}
 		defer resp.Body.Close()
 
@@ -176,15 +213,43 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 	for attempt := 1; attempt <= maxRetries; attempt++ {
 		jcResp, lastErr = client.Post(chatEndpoint, jcBody)
 		if lastErr != nil {
+			// Deterministic content rejections (thinking signature, image input)
+			// are handled by the one-shot repair below — an identical retry
+			// can only fail the same way.
+			if isThinkingSignatureError(lastErr.Error()) || isImageUnsupportedError(lastErr.Error()) {
+				break
+			}
+			// HTML shell page: the gateway rejected the request outright
+			// (typically oversized); identical retries only burn minutes.
+			if isHtmlShellError(lastErr.Error()) {
+				break
+			}
+			if isUpstreamPromptError(lastErr.Error()) {
+				// Empty-prompt rejection (upstream 1213): drop messages that
+				// translate to an empty payload and retry. A floor-truncated
+				// conversation can leave an orphaned tool_result-only user
+				// message; an identical retry can only fail the same way.
+				if stripEmptyUserMessages(req) > 0 {
+					jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+					reqLog(r).Warn("upstream rejected empty prompt (1213), retrying without empty user messages (non-stream)", "attempt", attempt)
+					continue
+				}
+				break
+			}
 			if isContextLimitError(lastErr.Error()) {
-				// Progressive truncation on context limit
+				// Progressive compression first, truncation as fallback.
+				if CompressMessages(req, summarizer) {
+					jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+					reqLog(r).Warn("retrying with compressed messages (non-stream)", "attempt", attempt)
+					continue
+				}
 				if truncateMessages(req) {
 					jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
 					reqLog(r).Warn("retrying with truncated messages (non-stream)", "attempt", attempt)
 					continue
 				}
-				reqLog(r).Warn("context limit exceeded, cannot truncate further")
-				writeAnthropicRequestError(w, "上下文长度超出模型限制，且无法进一步截断。请压缩对话历史或开启新对话。原始错误: "+lastErr.Error())
+				reqLog(r).Warn("context limit exceeded, cannot shrink further")
+				writeAnthropicRequestError(w, "上下文长度超出模型限制，且无法进一步压缩。请压缩对话历史或开启新对话。原始错误: "+lastErr.Error())
 				return
 			}
 			reqLog(r).Error("non-stream retry error", "attempt", attempt, "max", maxRetries, "error", lastErr)
@@ -202,18 +267,51 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 			writeAnthropicRequestError(w, "上下文长度超出模型限制。请压缩对话历史或开启新对话。原始错误: "+errMsg)
 			return
 		}
-		if isTimeoutError(lastErr) {
-			reqLog(r).Error("upstream timeout after retries", "error", lastErr)
-			writeAnthropicError(w, 504, "上游服务响应超时，请稍后重试。如果问题持续，请尝试减少上下文长度或开启新对话。原始错误: "+errMsg)
+		// One-shot content repair: a rejected thinking signature is always a
+		// replayed history block, and an image rejection on a vision-listed
+		// model is still recoverable by degrading to a placeholder.
+		if isThinkingSignatureError(errMsg) && stripThinkingBlocks(req) > 0 {
+			reqLog(r).Warn("upstream rejected thinking signature, retrying without thinking blocks (non-stream)", "error", truncate(errMsg, 300))
+			jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+			jcResp, lastErr = client.Post(chatEndpoint, jcBody)
+			if lastErr != nil {
+				writeAnthropicError(w, 500, lastErr.Error())
+				return
+			}
+		} else if isImageUnsupportedError(errMsg) && replaceUnsupportedImages(req) > 0 {
+			reqLog(r).Warn("upstream rejected image input, retrying with placeholders (non-stream)", "error", truncate(errMsg, 300))
+			jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+			jcResp, lastErr = client.Post(chatEndpoint, jcBody)
+			if lastErr != nil {
+				writeAnthropicError(w, 500, lastErr.Error())
+				return
+			}
+		} else if isHtmlShellError(errMsg) && dropToolSchemas(req) {
+			// Gateway answered with its HTML landing page — the payload was
+			// rejected outright, typically for size. Tool schemas dominate
+			// the observed failures (160+ schemas); degrade to a plain
+			// completion rather than failing the whole conversation.
+			reqLog(r).Warn("upstream answered with HTML shell page, retrying without tool schemas (non-stream)", "error", truncate(errMsg, 300))
+			jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+			jcResp, lastErr = client.Post(chatEndpoint, jcBody)
+			if lastErr != nil {
+				writeAnthropicRequestError(w, "上游网关拒绝了过大的请求（收到 HTML 页面而非 JSON）。已尝试去掉工具 schema 重试仍失败，请压缩对话历史（/compact）或减少挂载的工具数量后重试。原始错误: "+truncate(lastErr.Error(), 300))
+				return
+			}
+		} else {
+			if isTimeoutError(lastErr) {
+				reqLog(r).Error("upstream timeout after retries", "error", lastErr)
+				writeAnthropicError(w, 504, "上游服务响应超时，请稍后重试。如果问题持续，请尝试减少上下文长度或开启新对话。原始错误: "+errMsg)
+				return
+			}
+			if strings.Contains(errMsg, "content_filter") || strings.Contains(errMsg, "SENSITIVE_CONTENT") {
+				reqLog(r).Warn("upstream content_filter (non-stream), returning detailed error")
+				writeContentFilterError(w, errMsg)
+				return
+			}
+			writeAnthropicError(w, 500, errMsg)
 			return
 		}
-		if strings.Contains(errMsg, "content_filter") || strings.Contains(errMsg, "SENSITIVE_CONTENT") {
-			reqLog(r).Warn("upstream content_filter (non-stream), returning detailed error")
-			writeContentFilterError(w, errMsg)
-			return
-		}
-		writeAnthropicError(w, 500, errMsg)
-		return
 	}
 	// Check for content_filter in non-stream response
 	if choices, ok := jcResp["choices"].([]interface{}); ok && len(choices) > 0 {
@@ -283,12 +381,12 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 	jcBody["stream"] = true
 	logRequestDetails(r, "translated request (stream)", jcBody)
 
-	// Preemptive truncation: estimate tokens and truncate before sending
-	if rounds := PreemptiveTruncate(req); rounds < 0 {
-		writeAnthropicRequestError(w, "上下文过长，自动截断后仍超出限制，请使用 /compact 或开启新对话。")
-		return
-	} else if rounds > 0 {
-		reqLog(r).Warn("preemptive truncation applied (stream)", "rounds", rounds)
+	// Preemptive shrink: estimate tokens and compress/truncate before
+	// sending. It always sends something — estimates are rough, so the
+	// upstream is the arbiter; a true overflow is retried below.
+	summarizer := NewChatSummarizer(client, systemDefault)
+	if rounds := PreemptiveTruncate(req, summarizer); rounds > 0 {
+		reqLog(r).Warn("preemptive shrink applied (stream)", "rounds", rounds)
 	}
 
 	jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
@@ -336,16 +434,49 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 		}
 	}()
 
-	// Connect with retry, progressive auto-truncate on context limit
+	// Connect with retry, progressive compression on context limit, truncation
+	// as fallback.
 	resp, err := h.connectStreamWithRetry(r, jcBody, client)
 	for truncRound := 0; err != nil && isContextLimitError(err.Error()) && truncRound < maxTruncationRounds; truncRound++ {
-		reqLog(r).Warn("stream context limit, truncating", "round", truncRound+1)
-		if !truncateMessages(req) {
+		reqLog(r).Warn("stream context limit, shrinking", "round", truncRound+1)
+		if !CompressMessages(req, summarizer) && !truncateMessages(req) {
 			break
 		}
 		jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
 		jcBody["stream"] = true
 		resp, err = h.connectStreamWithRetry(r, jcBody, client)
+	}
+	// One-shot content repair before SSE headers are committed: rejected
+	// thinking signatures and image inputs are recoverable by rewriting the
+	// history (the client has not received anything yet, so the repair is
+	// invisible — it just looks like a slow first token).
+	if err != nil {
+		errMsg := err.Error()
+		repaired := false
+		if isThinkingSignatureError(errMsg) && stripThinkingBlocks(req) > 0 {
+			reqLog(r).Warn("upstream rejected thinking signature, retrying without thinking blocks (stream)", "error", truncate(errMsg, 300))
+			repaired = true
+		} else if isUpstreamPromptError(errMsg) && stripEmptyUserMessages(req) > 0 {
+			// Empty-prompt rejection (upstream 1213): floor truncation can
+			// leave orphaned tool_result-only user messages that translate
+			// to {"content":""}; retry without them.
+			reqLog(r).Warn("upstream rejected empty prompt (1213), retrying without empty user messages (stream)", "error", truncate(errMsg, 300))
+			repaired = true
+		} else if isImageUnsupportedError(errMsg) && replaceUnsupportedImages(req) > 0 {
+			reqLog(r).Warn("upstream rejected image input, retrying with placeholders (stream)", "error", truncate(errMsg, 300))
+			repaired = true
+		} else if isHtmlShellError(errMsg) && dropToolSchemas(req) {
+			// Gateway answered with its HTML landing page — payload rejected
+			// outright, typically for size. Tool schemas dominate the observed
+			// failures; degrade to a plain completion rather than dying.
+			reqLog(r).Warn("upstream answered with HTML shell page, retrying without tool schemas (stream)", "error", truncate(errMsg, 300))
+			repaired = true
+		}
+		if repaired {
+			jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+			jcBody["stream"] = true
+			resp, err = h.connectStreamWithRetry(r, jcBody, client)
+		}
 	}
 	close(stopHeartbeat)
 	<-heartbeatDone
@@ -359,6 +490,11 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 		if isTimeoutError(err) {
 			reqLog(r).Error("upstream timeout (stream) after retries", "error", err)
 			writeStreamError(w, flusher, "上游服务响应超时，请稍后重试。如果问题持续，请尝试减少上下文长度或开启新对话。原始错误: "+errMsg)
+			return
+		}
+		if isHtmlShellError(errMsg) {
+			reqLog(r).Error("upstream answered with HTML shell page (stream), request rejected by gateway", "error", truncate(errMsg, 300))
+			writeStreamError(w, flusher, "上游网关拒绝了过大的请求（收到 HTML 页面而非 JSON）。请压缩对话历史（/compact）或减少挂载的工具数量后重试。原始错误: "+truncate(errMsg, 300))
 			return
 		}
 		if strings.Contains(errMsg, "content_filter") || strings.Contains(errMsg, "SENSITIVE_CONTENT") {
@@ -512,8 +648,9 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 	FormatSSE(w, "message_delta", sseMessageDelta{
 		Type: "message_delta", Delta: deltaStop{StopReason: stopReason},
 		Usage: struct {
+			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
-		}{OutputTokens: outputTokens},
+		}{InputTokens: streamInTk, OutputTokens: outputTokens},
 	})
 	FormatSSE(w, "message_stop", sseMessageStop{Type: "message_stop"})
 	flusher.Flush()
@@ -565,9 +702,55 @@ func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, 
 	}()
 
 	resp, err := client.PostStream("/api/saas/openai/v1/responses", body)
+	// Progressive compression on context limit, truncation as fallback.
+	// Only pings were sent so far, so the repair is invisible.
+	summarizer := NewChatSummarizer(client, systemDefault)
+	for truncRound := 0; err != nil && isContextLimitError(err.Error()) && truncRound < maxTruncationRounds; truncRound++ {
+		reqLog(r).Warn("responses stream context limit, shrinking", "round", truncRound+1)
+		if !CompressMessages(req, summarizer) && !truncateMessages(req) {
+			break
+		}
+		jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+		jcBody["stream"] = true
+		body = joycode.ChatToResponses(jcBody)
+		resp, err = client.PostStream("/api/saas/openai/v1/responses", body)
+	}
+	if err != nil && isContextLimitError(err.Error()) {
+		truncateMessagesToFloor(req)
+		jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+		jcBody["stream"] = true
+		body = joycode.ChatToResponses(jcBody)
+		resp, err = client.PostStream("/api/saas/openai/v1/responses", body)
+	}
+	// One-shot content repair: SSE headers and message_start were committed
+	// above, but a repaired request that succeeds produces a normal full
+	// message, so the client just sees a slow start.
+	if err != nil {
+		errMsg := err.Error()
+		repaired := false
+		if isThinkingSignatureError(errMsg) && stripThinkingBlocks(req) > 0 {
+			reqLog(r).Warn("upstream rejected thinking signature, retrying without thinking blocks (responses stream)", "error", truncate(errMsg, 300))
+			repaired = true
+		} else if isImageUnsupportedError(errMsg) && replaceUnsupportedImages(req) > 0 {
+			reqLog(r).Warn("upstream rejected image input, retrying with placeholders (responses stream)", "error", truncate(errMsg, 300))
+			repaired = true
+		}
+		if repaired {
+			jcBody := TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+			jcBody["stream"] = true
+			body = joycode.ChatToResponses(jcBody)
+			resp, err = client.PostStream("/api/saas/openai/v1/responses", body)
+		}
+	}
 	close(stopHeartbeat)
 	<-heartbeatDone
 	if err != nil {
+		errMsg := err.Error()
+		if isContextLimitError(errMsg) {
+			reqLog(r).Warn("context limit exceeded (responses stream), cannot proceed even after progressive truncation")
+			writeStreamError(w, flusher, "上下文长度超出模型限制，已尝试自动截断但仍无法满足。请压缩对话历史或开启新对话。原始错误: "+errMsg)
+			return
+		}
 		reqLog(r).Error("responses stream failed", "error", err)
 		writeStreamError(w, flusher, err.Error())
 		return
@@ -616,8 +799,9 @@ func (h *Handler) handleResponsesStream(w http.ResponseWriter, r *http.Request, 
 	FormatSSE(w, "message_delta", sseMessageDelta{
 		Type: "message_delta", Delta: deltaStop{StopReason: result.StopReason},
 		Usage: struct {
+			InputTokens  int `json:"input_tokens"`
 			OutputTokens int `json:"output_tokens"`
-		}{OutputTokens: result.Usage.OutputTokens},
+		}{InputTokens: result.Usage.InputTokens, OutputTokens: result.Usage.OutputTokens},
 	})
 	FormatSSE(w, "message_stop", sseMessageStop{Type: "message_stop"})
 	flusher.Flush()
@@ -656,6 +840,36 @@ func (h *Handler) handleNativeAnthropicStream(w http.ResponseWriter, r *http.Req
 	}()
 
 	resp, err := h.connectNativeAnthropicStreamWithRetry(r, body, client)
+	// Progressive compression on context limit — the native path previously
+	// had no overflow handling at all. Compression first, truncation as
+	// fallback; only SSE comment lines were sent so far, so invisible.
+	summarizer := NewChatSummarizer(client, systemDefault)
+	for truncRound := 0; err != nil && isContextLimitError(err.Error()) && truncRound < maxTruncationRounds; truncRound++ {
+		reqLog(r).Warn("native anthropic stream context limit, shrinking", "round", truncRound+1)
+		if !CompressMessages(req, summarizer) && !truncateMessages(req) {
+			break
+		}
+		body = TranslateAnthropicRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+		resp, err = h.connectNativeAnthropicStreamWithRetry(r, body, client)
+	}
+	// One-shot content repair while the client has only seen SSE comments:
+	// rejected thinking signatures / image inputs are recoverable by
+	// rewriting the history before any real event is emitted.
+	if err != nil {
+		errMsg := err.Error()
+		repaired := false
+		if isThinkingSignatureError(errMsg) && stripThinkingBlocks(req) > 0 {
+			reqLog(r).Warn("native upstream rejected thinking signature, retrying without thinking blocks (stream)", "error", truncate(errMsg, 300))
+			repaired = true
+		} else if isImageUnsupportedError(errMsg) && replaceUnsupportedImages(req) > 0 {
+			reqLog(r).Warn("native upstream rejected image input, retrying with placeholders (stream)", "error", truncate(errMsg, 300))
+			repaired = true
+		}
+		if repaired {
+			body = TranslateAnthropicRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+			resp, err = h.connectNativeAnthropicStreamWithRetry(r, body, client)
+		}
+	}
 	close(stopHeartbeat)
 	<-heartbeatDone
 	if err != nil {
@@ -733,6 +947,35 @@ func (h *Handler) handleNativeAnthropicNonStream(w http.ResponseWriter, r *http.
 	logRequestDetails(r, "translated native anthropic request (non-stream)", body)
 
 	resp, err := h.connectNativeAnthropicStreamWithRetry(r, body, client)
+	// Progressive compression on context limit — the native path previously
+	// had no overflow handling at all. Nothing has been written to the client
+	// yet, so the shrink is invisible.
+	summarizer := NewChatSummarizer(client, systemDefault)
+	for truncRound := 0; err != nil && isContextLimitError(err.Error()) && truncRound < maxTruncationRounds; truncRound++ {
+		reqLog(r).Warn("native anthropic non-stream context limit, shrinking", "round", truncRound+1)
+		if !CompressMessages(req, summarizer) && !truncateMessages(req) {
+			break
+		}
+		body = TranslateAnthropicRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+		resp, err = h.connectNativeAnthropicStreamWithRetry(r, body, client)
+	}
+	// Same one-shot repair as the stream path: nothing has been written to
+	// the client yet, so fixing the history costs nothing observable.
+	if err != nil {
+		errMsg := err.Error()
+		repaired := false
+		if isThinkingSignatureError(errMsg) && stripThinkingBlocks(req) > 0 {
+			reqLog(r).Warn("native upstream rejected thinking signature, retrying without thinking blocks (non-stream)", "error", truncate(errMsg, 300))
+			repaired = true
+		} else if isImageUnsupportedError(errMsg) && replaceUnsupportedImages(req) > 0 {
+			reqLog(r).Warn("native upstream rejected image input, retrying with placeholders (non-stream)", "error", truncate(errMsg, 300))
+			repaired = true
+		}
+		if repaired {
+			body = TranslateAnthropicRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+			resp, err = h.connectNativeAnthropicStreamWithRetry(r, body, client)
+		}
+	}
 	if err != nil {
 		reqLog(r).Error("native anthropic non-stream failed after retries", "error", err)
 		writeAnthropicError(w, 500, err.Error())
@@ -865,6 +1108,12 @@ func (h *Handler) connectNativeAnthropicStreamWithRetry(r *http.Request, body ma
 		if err != nil {
 			lastErr = err
 			reqLog(r).Error("native anthropic stream connect error", "attempt", attempt, "max", maxRetries, "error", err)
+			// Deterministic content rejections (thinking signature, image
+			// input) go to the caller's one-shot repair; identical retries
+			// can only fail the same way.
+			if isThinkingSignatureError(err.Error()) || isImageUnsupportedError(err.Error()) {
+				return nil, lastErr
+			}
 			if attempt < maxRetries {
 				time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 			}
@@ -883,6 +1132,12 @@ func (h *Handler) connectNativeAnthropicStreamWithRetry(r *http.Request, body ma
 		if err := nativeAnthropicLineError(firstLine); err != nil {
 			resp.Body.Close()
 			lastErr = err
+			// Deterministic content rejections (thinking signature, image
+			// input) go to the one-shot repair path; identical retries only
+			// burn the caller's time.
+			if isThinkingSignatureError(err.Error()) || isImageUnsupportedError(err.Error()) {
+				return nil, lastErr
+			}
 			if attempt < maxRetries {
 				time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 			}
@@ -974,6 +1229,12 @@ func (h *Handler) connectStreamWithRetry(r *http.Request, jcBody map[string]inte
 		if err != nil {
 			lastErr = err
 			reqLog(r).Error("stream connect error", "attempt", attempt, "max", maxRetries, "error", err)
+			// Deterministic content rejections (thinking signature, image
+			// input) are handled by the caller's one-shot repair; identical
+			// retries can only fail the same way.
+			if isThinkingSignatureError(err.Error()) || isImageUnsupportedError(err.Error()) {
+				return nil, lastErr
+			}
 			if attempt < maxRetries {
 				time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
 			}
@@ -1000,8 +1261,17 @@ func (h *Handler) connectStreamWithRetry(r *http.Request, jcBody map[string]inte
 			if isContextLimitError(dataContent) {
 				return nil, lastErr
 			}
-			// SENSITIVE_CONTENT errors are deterministic — retrying is pointless
-			if strings.Contains(dataContent, "SENSITIVE_CONTENT") {
+			// Deterministic errors — retrying identically is pointless:
+			// content_filter goes straight to the caller, thinking-signature
+			// and image-input rejections go to the one-shot repair path.
+			// Empty-prompt rejection (upstream 1213) is deterministic too:
+			// the caller's repair loop strips empty user messages.
+			// HTML shell page: the gateway rejected the request outright
+			// (typically oversized); identical retries only burn minutes.
+			if strings.Contains(dataContent, "SENSITIVE_CONTENT") ||
+				isUpstreamPromptError(dataContent) ||
+				isHtmlShellError(dataContent) ||
+				isThinkingSignatureError(dataContent) || isImageUnsupportedError(dataContent) {
 				return nil, lastErr
 			}
 			if attempt < maxRetries {

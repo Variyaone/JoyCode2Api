@@ -37,6 +37,10 @@ func (s *Server) handleChat(w http.ResponseWriter, r *http.Request) {
 		return
 	}
 	client := s.getClient(r)
+	if IsClaudeModel(model) {
+		s.handleClaudeChat(w, r, &req, model)
+		return
+	}
 	if joycode.IsResponsesAPIModel(model) {
 		s.handleResponsesModel(w, r, client, &req, model)
 		return

@@ -26,6 +26,10 @@ type Keeper struct {
 	running  bool
 	stopCh   chan struct{}
 	refreshTTL time.Duration // max age before an account needs refresh
+
+	// Hook, if set, runs at the start of every keep-alive tick. Used to fold
+	// additional periodic integrity checks into the same loop.
+	Hook func()
 }
 
 // NewKeeper creates a new keepalive keeper.
@@ -76,6 +80,9 @@ func (k *Keeper) Start(checkInterval time.Duration) {
 		for {
 			select {
 			case <-ticker.C:
+				if k.Hook != nil {
+					k.Hook()
+				}
 				k.checkStale()
 			case <-k.stopCh:
 				return

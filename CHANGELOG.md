@@ -2,6 +2,25 @@
 
 All notable changes to this project will be documented in this file.
 
+## [Unreleased] - 2026-10-16
+
+### 部署脚本升级（deploy-without-admin.bat）
+- 重写为自包含 7 步事务化部署流程：定位新二进制 → 停服 → 备份 → 替换 → 启动 → 健康检查（约 90s）→ 收尾；失败自动回滚（`.bad` 隔离 + `.bak` 恢复 + 重启 + 二次健康检查）。
+- 新增参数：`--dry-run`/`-n`（只检查不改动）、`--port N`（默认 34891）、`--help`/`-h`、位置参数指定新二进制路径。
+- 自动探测多种新二进制命名（`JoyCode2Api.exe.new`、`JoyCode2Api.new.exe`、`JoyCode2Api-new.exe`、`JoyCode2Api.exe.new.exe`），消除与 `手动部署-openclaw.bat` 的命名不一致。
+- 引入 `fc /b` 字节比对：新旧二进制相同时跳过部署，避免无谓停服；备份采用时间戳命名 `JoyCode2Api.exe.bak-<TS>`。
+- 修复编码陷阱：原脚本 `chcp 65001` 会导致 cmd.exe 切换代码页后重新解析脚本字节错位，产生 `'-' is not recognized` 等报错；现改为 **GBK 编码 + CRLF 行尾符 + 不使用 chcp**，与 cmd 默认代码页 936 一致。
+- 参数解析改用 `ARG1/ARG2` 变量 + `goto` 循环替代 `shift`；dry-run 模式下跳过 `pause` 避免阻塞。
+
+## [Unreleased] - 2026-10-09
+
+### 上游容错（对齐 cc-switch 同类能力，单上游适配版）
+- Thinking 签名整流：上游因 thinking 签名不兼容/校验失败拒绝请求时，剥离历史 assistant 消息中的 thinking/redacted_thinking 块并对同一上游重试一次（非流式、流式、原生 Anthropic、Responses 四条路径全覆盖）；剥离前先让重试循环立即跳出，不再对确定性内容错误烧满 3 次原样重试。
+- 不支持图片降级：上游明确拒绝图片输入时，将所有 image 块（含 tool_result 内嵌）替换为 `[Unsupported Image]` 文本占位并重试一次，对话不中断。
+- 纯文本模型预判：新增已确认纯文本模型注册表（JoyAI-Code-1.5、GLM-5.3、GLM-5.2-jcloud、DeepSeek-V4-Pro、Doubao-Seed-2.0-pro，依据 2026-09-10 实测 vision=false），发送前预剥图片；视觉模型与未知模型不受影响，上游报错兜底仍保留。
+- Thinking Budget 错误保持透传不自动修复（维持既有设计哲学：静默改写调用方参数意图不可取）；thinking signature 剥离、图片降级均只处理请求内容，不动参数。
+- 块级重写基于原始 JSON，保留块的未知字段（citations、厂商扩展）逐字节原样保留；新增 12 组回归测试覆盖四条路径、正负分类器与字段保真。
+
 ## [Preview] - 2026-09-12
 
 - 消费视角首页：撤下未接入的会话/消息占位及重复连续天数，保留四项核心用量/费用指标；每日 Token、参考费用、请求次数趋势和明细表直接置于 Overview，补充模型 Token/费用排序。

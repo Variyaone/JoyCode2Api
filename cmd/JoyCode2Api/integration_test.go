@@ -15,12 +15,26 @@ import (
 
 func buildTestBinary(t *testing.T) string {
 	t.Helper()
+	// Default to testmode: most integration tests exercise API behavior, not
+	// the session gate (which has its own production-mode tests).
+	return buildTaggedTestBinary(t, "testmode")
+}
+
+// buildTaggedTestBinary builds the test server binary with optional build
+// tags. Empty tags build in production mode (session guard compiled in).
+func buildTaggedTestBinary(t *testing.T, tags string) string {
+	t.Helper()
 	suffix := ""
 	if runtime.GOOS == "windows" {
 		suffix = ".exe"
 	}
 	binPath := filepath.Join(t.TempDir(), "joycode-proxy-test"+suffix)
-	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"+suffix), "build", "-o", binPath, ".")
+	args := []string{"build", "-o", binPath}
+	if tags != "" {
+		args = append(args, "-tags", tags)
+	}
+	args = append(args, ".")
+	cmd := exec.Command(filepath.Join(runtime.GOROOT(), "bin", "go"+suffix), args...)
 	if output, err := cmd.CombinedOutput(); err != nil {
 		t.Fatalf("build failed: %s: %v", string(output), err)
 	}
