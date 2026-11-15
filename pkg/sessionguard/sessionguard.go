@@ -146,14 +146,18 @@ func bytesCompare(a, b []byte) int {
 	return 0
 }
 
-// Verify checks the current session state. It returns nil when the session is
-// valid, ErrSessionExpired when there is no valid grant.
+// Verify checks the current session state. It returns nil when access is
+// granted, ErrSessionExpired when a present grant has expired or been
+// revoked, and ErrSessionMismatch when a present token was issued for
+// another machine.
 //
-// Grant sources combine: the globally published manifest (primary; issued
-// globally by the operator) and, if present, a locally imported machine-bound
-// token (fallback for copies that have never synced). The session is valid
-// until the later of the two, with the manifest required to stay fresh — a
-// revocation in the manifest propagates within one sync cycle.
+// Dormant until armed: when NO grant material exists at all (no synced
+// manifest, no imported token) access is allowed — the guard is inert and
+// deployment behaves identically to an ungated build. The moment any grant
+// material appears, it governs: the manifest (once synced) fully takes over
+// (renewal extends, revocation caps) and must stay fresh; without a manifest
+// a locally imported machine-bound token applies. Revocation propagates
+// within one sync cycle.
 func (v *Verifier) Verify() error {
 	v.mu.Lock()
 	defer v.mu.Unlock()
@@ -182,12 +186,13 @@ func (v *Verifier) Verify() error {
 		return nil
 	}
 
-	// No manifest yet: fall back to a locally imported machine-bound token.
+	// Local token grant: applies only when a token has been imported.
 	if !v.haveToken {
 		// Re-read in case a token was imported since the last check.
 		v.reloadToken()
 		if !v.haveToken {
-			return ErrSessionExpired
+			// Dormant: no grant material at all — allow.
+			return nil
 		}
 	}
 	if v.token.MachineFP != v.fp {
@@ -277,30 +282,29 @@ func DiagCode() string {
 }
 
 // Status returns remaining validity for logging/diagnostics (not exposed in
-// any API response). Reflects the later of the manifest and local token
-// grants; ok is false when no valid session exists.
+// any API response). Reflects the governing grant (manifest first, then local
+// token); ok is false when no grant material exists (dormant guard — access
+// is allowed) or the governing grant has expired.
 func (v *Verifier) Status() (time.Duration, bool) {
 	v.mu.Lock()
 	defer v.mu.Unlock()
 	v.ensureLoaded()
 
-	validUntil, ok := time.Time{}, false
-	if until, have := v.cachedManifest(); have {
-		validUntil = until
-		ok = true
+	if until, ok := v.cachedManifest(); ok {
+		d := time.Until(until)
+		if d < 0 {
+			return 0, false
+		}
+		return d, true
 	}
-	if v.haveToken && v.token.MachineFP == v.fp && v.token.Expiry.After(validUntil) {
-		validUntil = v.token.Expiry
-		ok = true
+	if v.haveToken && v.token.MachineFP == v.fp {
+		d := time.Until(v.token.Expiry)
+		if d < 0 {
+			return 0, false
+		}
+		return d, true
 	}
-	if !ok {
-		return 0, false
-	}
-	d := time.Until(validUntil)
-	if d < 0 {
-		d = 0
-	}
-	return d, true
+	return 0, false
 }
 
 func (v *Verifier) highWater() (time.Time, bool) {

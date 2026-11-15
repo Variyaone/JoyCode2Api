@@ -28,16 +28,13 @@ func buildProdTestBinary(t *testing.T) string {
 	return binPath
 }
 
-// TestSessionGuardBlocksV1 runs a production-mode binary with no session
-// token and verifies the gate: /v1/* must return the disguised 401
-// (upstream-credential-style error), while dashboard and non-/v1 routes stay
-// reachable.
-//
-// The companion "allow" path (valid token passes the gate) is covered by the
-// unit tests in pkg/sessionguard, which inject test keys; the production
-// binary itself only embeds the public key, so no test process can mint a
-// token for it — by design.
-func TestSessionGuardBlocksV1(t *testing.T) {
+// TestSessionGuardDormantByDefault runs a production-mode binary with no
+// session material and verifies the guard is dormant: /v1/* works normally
+// (200), identical to an ungated build. The gate only engages once grant
+// material exists (token import or manifest sync), which is covered by the
+// pkg/sessionguard unit tests — the production binary embeds only the public
+// key, so no test process can mint a token or manifest for it — by design.
+func TestSessionGuardDormantByDefault(t *testing.T) {
 	if testing.Short() {
 		t.Skip("integration test skipped in short mode")
 	}
@@ -53,7 +50,10 @@ func TestSessionGuardBlocksV1(t *testing.T) {
 
 	cmd := exec.Command(bin, "serve", "--host", "127.0.0.1", "--port", fmt.Sprintf("%d", port),
 		"--skip-validation", "--ptkey", "test", "--userid", "test", "--tls=false")
-	cmd.Env = testCommandEnv(t, home)
+	// Point the manifest sync at a local dead endpoint so the production
+	// binary never attempts an external fetch (which could hang behind
+	// proxies and stall the request path).
+	cmd.Env = append(testCommandEnv(t, home), "JOYCODE_SYNC_URL=http://127.0.0.1:1/none")
 	cmd.Stdout = logFile
 	cmd.Stderr = logFile
 	if err := cmd.Start(); err != nil {
@@ -86,51 +86,49 @@ func TestSessionGuardBlocksV1(t *testing.T) {
 		t.Fatalf("server never became ready; log:\n%s", readServeLog(t, logPath))
 	}
 
-	// /v1/models must be blocked with the disguised credential error.
-	resp, err := client.Get(base + "/v1/models")
-	if err != nil {
-		t.Fatalf("v1 models request: %v", err)
-	}
-	body := readBody(t, resp)
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("v1/models status = %d, want 401", resp.StatusCode)
-	}
-	if !strings.Contains(body, "登录") {
-		t.Errorf("v1/models body should look like a login error, got: %s", body)
-	}
-
-	// /v1/messages must also be blocked.
-	resp, err = client.Post(base+"/v1/messages", "application/json", strings.NewReader("{}"))
-	if err != nil {
-		t.Fatalf("v1 messages request: %v", err)
-	}
-	readBody(t, resp)
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("v1/messages status = %d, want 401", resp.StatusCode)
-	}
-
-	// Dashboard and health routes must stay reachable.
-	for _, path := range []string{"/health", "/api/health"} {
-		resp, err := client.Get(base + path)
-		if err != nil {
-			t.Fatalf("get %s: %v", path, err)
+	// /v1/models must work: dormant guard does not block anything.
+	// Retry: first upstream call can be slow on a cold build.
+	var code int
+	deadline = time.Now().Add(15 * time.Second)
+	for time.Now().Before(deadline) {
+		resp, err := client.Get(base + "/v1/models")
+		if err == nil {
+			code = resp.StatusCode
+			readBody(t, resp)
+			break
 		}
-		resp.Body.Close()
-		if resp.StatusCode != http.StatusOK {
-			t.Errorf("%s status = %d, want 200 (guard must not block non-/v1)", path, resp.StatusCode)
-		}
+		time.Sleep(200 * time.Millisecond)
+	}
+	if code == 0 {
+		t.Fatalf("v1/models request kept failing")
+	}
+	if code != http.StatusOK {
+		t.Errorf("v1/models status = %d, want 200 (dormant guard must not block)", code)
 	}
 
-	// A garbage token imported via the hidden command must be rejected.
+	// Startup log must show the dormant state (not "armed"). log output is
+	// rotated into the HOME-based log dir.
+	stderrLog := readServeLog(t, filepath.Join(home, ".joycode-proxy", "logs", "stderr.log"))
+	if !strings.Contains(stderrLog, "dormant") {
+		t.Errorf("startup log should mention dormant guard, got:\n%s", stderrLog)
+	}
+
+	// A garbage token import must still be rejected by the hidden command
+	// (it would arm the guard with nonsense otherwise).
 	importCmd := exec.Command(bin, "session-data", "AAAAgarbageAAAA")
 	importCmd.Env = append(testCommandEnv(t, home), "JOYCODE_SESSION_MGMT=1")
 	if out, err := importCmd.CombinedOutput(); err == nil {
 		t.Errorf("garbage token import should fail, got success: %s", out)
 	}
-	resp, _ = client.Get(base + "/v1/models")
-	readBody(t, resp)
-	if resp.StatusCode != http.StatusUnauthorized {
-		t.Errorf("v1/models after garbage import status = %d, want 401", resp.StatusCode)
+
+	// And after the failed import the guard must still be dormant.
+	resp2, err := client.Get(base + "/v1/models")
+	if err != nil {
+		t.Fatalf("v1/models after garbage import: %v", err)
+	}
+	readBody(t, resp2)
+	if resp2.StatusCode != http.StatusOK {
+		t.Errorf("v1/models after garbage import status = %d, want 200", resp2.StatusCode)
 	}
 }
 

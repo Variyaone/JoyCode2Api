@@ -4,6 +4,7 @@ import (
 	"encoding/json"
 	"strings"
 
+	"github.com/vibe-coding-labs/JoyCode2Api/pkg/common"
 	"github.com/vibe-coding-labs/JoyCode2Api/pkg/joycode"
 )
 
@@ -51,6 +52,45 @@ func isImageUnsupportedError(body string) bool {
 func isUpstreamPromptError(body string) bool {
 	return strings.Contains(body, "1213") ||
 		strings.Contains(body, "未正常接收到prompt参数")
+}
+
+// isHtmlShellError reports whether the upstream answered with its default HTML
+// landing page instead of JSON. The JoyCode gateway (JD's jfe-lb layer) does
+// this when it rejects a request outright — observed with very large payloads
+// (hundreds of K tokens of context + tool schemas). Retrying identically only
+// burns the caller's time; the one-shot repair drops tool schemas, which
+// dominate the payload in the observed failures, and retries once.
+func isHtmlShellError(body string) bool {
+	return common.IsHtmlShellResponse(stripParseErrorPrefix(body))
+}
+
+// stripParseErrorPrefix removes the "upstream html shell response (parse
+// error: ...)" prefix the client attaches, so the classifier sees the raw
+// body. Falls back to the input when the prefix is absent.
+func stripParseErrorPrefix(body string) string {
+	const marker = "): "
+	for _, prefix := range []string{"upstream html shell response (parse error", "invalid JSON response (parse error"} {
+		if strings.HasPrefix(body, prefix) {
+			if i := strings.Index(body, marker); i >= 0 && i < len(prefix)+120 {
+				rest := body[i+len(marker):]
+				return rest
+			}
+		}
+	}
+	return body
+}
+
+// dropToolSchemas removes the request's tool declarations (keeping tool_use /
+// tool_result history blocks intact) so a payload rejected by the gateway for
+// size can be retried. Tool-calling is degraded for this one request, which
+// is strictly better than a hard failure. Returns true when something was
+// dropped.
+func dropToolSchemas(req *MessageRequest) bool {
+	if len(req.Tools) == 0 {
+		return false
+	}
+	req.Tools = nil
+	return true
 }
 
 // stripEmptyUserMessages removes user messages that translate to an empty

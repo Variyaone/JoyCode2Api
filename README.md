@@ -4,7 +4,7 @@
 
 **JoyCode → Anthropic / OpenAI 协议翻译器 · VABoost 增强版**
 
-让 Claude Code、Cursor、Codex 直接用上 JoyCode 背后的模型
+让 Claude Code、Cursor、Codex、Trae 直接用上 JoyCode 背后的模型
 
 [GitHub](https://github.com/variyaone/JoyCode2api-VABoost) · [Gitee（国内镜像）](https://gitee.com/variyaone/JoyCode2api-VABoost)
 
@@ -27,10 +27,11 @@ JoyCode（京东 AI 编程助手）背后挂了 GLM、Kimi、MiniMax、Doubao、
 ```
 Claude Code ─┐
 Cursor    ───┼──→  joyCode2api-VABoost  ──→  JoyCode API (jd.com)
-Codex     ───┘    (协议翻译层)
+Codex     ───┤    (协议翻译层)
+Trae      ───┘
 ```
 
-- **Anthropic Messages API** (`/v1/messages`) — Claude Code 走这个
+- **Anthropic Messages API** (`/v1/messages`) — Claude Code / Trae 走这个
 - **OpenAI Chat Completions API** (`/v1/chat/completions`) — Cursor / Codex 走这个
 
 工具调用（tool use）、流式输出（SSE）、上下文截断全部完整翻译，使用体验和原生 API 一致。
@@ -110,6 +111,27 @@ claude
 export OPENAI_BASE_URL=http://localhost:34891/v1
 export OPENAI_API_KEY=sk-joy-xxxx
 ```
+
+### Trae
+
+Trae 的自定义模型走 **Anthropic Messages 格式**（OpenAI 格式在 Trae 上不可用，见下表）。在 Trae「设置 → 模型供应商 → 添加模型」里：
+
+| 配置项 | 填什么 |
+|--------|--------|
+| API 格式 | **Anthropic Messages** |
+| Base URL | `http://127.0.0.1:34891`（**末尾不要带 `/v1`**） |
+| API Key | `sk-joy-xxxx`（或 `sk-joycode`，服务端不校验） |
+| 「完整 URL」开关 | **关闭**（Trae 会自己拼 `/v1/messages`） |
+
+配好后在 Trae 里选任意目录内模型即可用。已实测通过的模型：`GLM-5.3`、`Doubao-Seed-2.0-pro`、`JD-Kimi-K3`、`JD-DeepSeek-V4-Pro`、`Claude-Opus-5`、`GPT-6 Astra`、`GPT-5.6 Sol`、`MiniMax-M3`。
+
+两个已知坑（都已在服务端处理，配置按上表即可避开）：
+
+| 现象 | 原因 | 对策 |
+|------|------|------|
+| Base URL 带了 `/v1`，请求 404 / 返回空 | Trae 自动拼 `/v1/...`，双重前缀打到 `/v1/v1/messages` | Base URL 不带 `/v1`；服务端也已加 `/v1/v1/` 前缀自动剥除兜底 |
+| 思考模型报「llm response empty stream」 | 流开头全是 `reasoning_content`，Trae 只认 `content` 字段 | 用非思考模型，或升级到已修复的版本 |
+| OpenAI Chat Completions 格式不可用 | Trae 不带完整 URL 时只拼 `/chat/completions`（404）；带完整 URL 时流里 `choices:[]` 尾包被 Trae 判为空流 | **统一用 Anthropic Messages 格式** |
 
 ---
 

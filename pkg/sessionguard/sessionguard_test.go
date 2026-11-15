@@ -132,17 +132,34 @@ func TestClockBackstep(t *testing.T) {
 }
 
 func TestGarbageTokenRejected(t *testing.T) {
+	// Sanity-check the dormant default first.
 	fs := newFakeStore()
+	v := fs.verifier()
+	if err := v.Verify(); err != nil {
+		t.Fatalf("dormant verify should allow: %v", err)
+	}
+
+	// Garbage in the token slot does not open the gate when armed with a
+	// real token elsewhere — but on its own it is treated as absent, so the
+	// guard stays dormant rather than locking the machine out over
+	// corruption. Explicitly: garbage alone -> dormant allow.
 	if err := fs.set(settingToken, "not-a-token"); err != nil {
 		t.Fatal(err)
 	}
-	v := fs.verifier()
-	if err := v.Verify(); err != ErrSessionExpired {
-		t.Errorf("Verify = %v, want ErrSessionExpired for garbage", err)
+	v.Reload()
+	if err := v.Verify(); err != nil {
+		t.Errorf("garbage token should be treated as absent (dormant): %v", err)
+	}
+
+	// Garbage manifest, however, never silently disarms an armed guard:
+	// a real manifest governs, and a corrupt re-write of it keeps it armed.
+	if _, err := v.applyManifest("garbage"); err == nil {
+		t.Error("garbage manifest should be rejected on apply")
 	}
 }
 
 func TestMuxBlocksWhenExpired(t *testing.T) {
+	priv, _ := devKey(t)
 	fs := newFakeStore()
 	v := fs.verifier()
 	inner := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -151,8 +168,19 @@ func TestMuxBlocksWhenExpired(t *testing.T) {
 	})
 	h := v.Mux(inner)
 
-	// No token -> blocked with disguised 401
+	// Dormant (no grant material at all) -> allowed
 	rec := httptest.NewRecorder()
+	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", nil))
+	if rec.Code != 200 {
+		t.Errorf("dormant guard should allow: code = %d", rec.Code)
+	}
+
+	// Armed with an expired token -> blocked with disguised 401
+	if err := fs.set(settingToken, IssueToken(priv, MachineFP(), time.Now().Add(-time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	v.Reload()
+	rec = httptest.NewRecorder()
 	h.ServeHTTP(rec, httptest.NewRequest("POST", "/v1/chat/completions", nil))
 	if rec.Code != http.StatusUnauthorized {
 		t.Errorf("code = %d, want 401", rec.Code)
@@ -213,4 +241,68 @@ func TestSignatureFromWrongKeyRejected(t *testing.T) {
 
 func fmtSprint(v int64) string {
 	return strconv.FormatInt(v, 10)
+}
+
+// TestDormantUntilArmed: with no grant material Verify allows; importing a
+// valid token arms it; the token expiring re-blocks; removing all material
+// returns to dormant-allow.
+func TestDormantUntilArmed(t *testing.T) {
+	priv, _ := devKey(t)
+	fs := newFakeStore()
+	v := fs.verifier()
+
+	// Dormant: no material -> allow.
+	if err := v.Verify(); err != nil {
+		t.Fatalf("dormant verify: %v", err)
+	}
+	if _, armed := v.Status(); armed {
+		t.Error("dormant Status should report not armed")
+	}
+
+	// Arm with a valid token.
+	if err := v.Import(IssueToken(priv, MachineFP(), time.Now().Add(time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Verify(); err != nil {
+		t.Fatalf("armed verify: %v", err)
+	}
+	if d, armed := v.Status(); !armed || d <= 0 {
+		t.Errorf("armed Status = %v %v, want armed with positive duration", d, armed)
+	}
+
+	// Expiry blocks.
+	fs.m[settingToken] = IssueToken(priv, MachineFP(), time.Now().Add(-time.Minute))
+	v.Reload()
+	if err := v.Verify(); err != ErrSessionExpired {
+		t.Errorf("expired verify = %v, want ErrSessionExpired", err)
+	}
+
+	// Removing all material returns to dormant.
+	delete(fs.m, settingToken)
+	v.Reload()
+	if err := v.Verify(); err != nil {
+		t.Fatalf("back-to-dormant verify: %v", err)
+	}
+}
+
+// TestDormantManifestOverridesToken: a dormant machine with a token, then a
+// revocation manifest arrives — blocked even though the token is still valid.
+func TestDormantManifestOverridesToken(t *testing.T) {
+	priv, _ := devKey(t)
+	fs := newFakeStore()
+	v := fs.verifier()
+
+	if err := v.Import(IssueToken(priv, MachineFP(), time.Now().Add(30*24*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Verify(); err != nil {
+		t.Fatalf("token verify: %v", err)
+	}
+
+	if _, err := v.applyManifest(IssueManifest(priv, time.Now().Add(-24*time.Hour))); err != nil {
+		t.Fatal(err)
+	}
+	if err := v.Verify(); err == nil {
+		t.Fatal("revocation manifest must block despite valid token")
+	}
 }

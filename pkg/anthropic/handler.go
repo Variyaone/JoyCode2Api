@@ -219,6 +219,11 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 			if isThinkingSignatureError(lastErr.Error()) || isImageUnsupportedError(lastErr.Error()) {
 				break
 			}
+			// HTML shell page: the gateway rejected the request outright
+			// (typically oversized); identical retries only burn minutes.
+			if isHtmlShellError(lastErr.Error()) {
+				break
+			}
 			if isUpstreamPromptError(lastErr.Error()) {
 				// Empty-prompt rejection (upstream 1213): drop messages that
 				// translate to an empty payload and retry. A floor-truncated
@@ -279,6 +284,18 @@ func (h *Handler) handleNonStream(w http.ResponseWriter, r *http.Request, req *M
 			jcResp, lastErr = client.Post(chatEndpoint, jcBody)
 			if lastErr != nil {
 				writeAnthropicError(w, 500, lastErr.Error())
+				return
+			}
+		} else if isHtmlShellError(errMsg) && dropToolSchemas(req) {
+			// Gateway answered with its HTML landing page — the payload was
+			// rejected outright, typically for size. Tool schemas dominate
+			// the observed failures (160+ schemas); degrade to a plain
+			// completion rather than failing the whole conversation.
+			reqLog(r).Warn("upstream answered with HTML shell page, retrying without tool schemas (non-stream)", "error", truncate(errMsg, 300))
+			jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
+			jcResp, lastErr = client.Post(chatEndpoint, jcBody)
+			if lastErr != nil {
+				writeAnthropicRequestError(w, "上游网关拒绝了过大的请求（收到 HTML 页面而非 JSON）。已尝试去掉工具 schema 重试仍失败，请压缩对话历史（/compact）或减少挂载的工具数量后重试。原始错误: "+truncate(lastErr.Error(), 300))
 				return
 			}
 		} else {
@@ -448,6 +465,12 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 		} else if isImageUnsupportedError(errMsg) && replaceUnsupportedImages(req) > 0 {
 			reqLog(r).Warn("upstream rejected image input, retrying with placeholders (stream)", "error", truncate(errMsg, 300))
 			repaired = true
+		} else if isHtmlShellError(errMsg) && dropToolSchemas(req) {
+			// Gateway answered with its HTML landing page — payload rejected
+			// outright, typically for size. Tool schemas dominate the observed
+			// failures; degrade to a plain completion rather than dying.
+			reqLog(r).Warn("upstream answered with HTML shell page, retrying without tool schemas (stream)", "error", truncate(errMsg, 300))
+			repaired = true
 		}
 		if repaired {
 			jcBody = TranslateRequest(req, store.GetAccountDefaultModel(r), systemDefault)
@@ -467,6 +490,11 @@ func (h *Handler) handleStream(w http.ResponseWriter, r *http.Request, req *Mess
 		if isTimeoutError(err) {
 			reqLog(r).Error("upstream timeout (stream) after retries", "error", err)
 			writeStreamError(w, flusher, "上游服务响应超时，请稍后重试。如果问题持续，请尝试减少上下文长度或开启新对话。原始错误: "+errMsg)
+			return
+		}
+		if isHtmlShellError(errMsg) {
+			reqLog(r).Error("upstream answered with HTML shell page (stream), request rejected by gateway", "error", truncate(errMsg, 300))
+			writeStreamError(w, flusher, "上游网关拒绝了过大的请求（收到 HTML 页面而非 JSON）。请压缩对话历史（/compact）或减少挂载的工具数量后重试。原始错误: "+truncate(errMsg, 300))
 			return
 		}
 		if strings.Contains(errMsg, "content_filter") || strings.Contains(errMsg, "SENSITIVE_CONTENT") {
@@ -1238,8 +1266,11 @@ func (h *Handler) connectStreamWithRetry(r *http.Request, jcBody map[string]inte
 			// and image-input rejections go to the one-shot repair path.
 			// Empty-prompt rejection (upstream 1213) is deterministic too:
 			// the caller's repair loop strips empty user messages.
+			// HTML shell page: the gateway rejected the request outright
+			// (typically oversized); identical retries only burn minutes.
 			if strings.Contains(dataContent, "SENSITIVE_CONTENT") ||
 				isUpstreamPromptError(dataContent) ||
+				isHtmlShellError(dataContent) ||
 				isThinkingSignatureError(dataContent) || isImageUnsupportedError(dataContent) {
 				return nil, lastErr
 			}

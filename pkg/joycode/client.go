@@ -443,6 +443,12 @@ func (c *Client) Post(endpoint string, body map[string]interface{}) (map[string]
 	var result map[string]interface{}
 	if err := json.Unmarshal(data, &result); err != nil {
 		slog.Error("unmarshal upstream response", "endpoint", endpoint, "error", err)
+		// An HTML shell page means the gateway rejected the request outright
+		// (observed with very large payloads); surface it as a distinct,
+		// non-retryable error instead of a generic parse failure.
+		if common.IsHtmlShellResponse(string(data)) {
+			return nil, fmt.Errorf("upstream html shell response (parse error: %s): %s", err.Error(), truncate(string(data), 200))
+		}
 		return nil, fmt.Errorf("invalid JSON response (parse error: %s): %s", err.Error(), truncate(string(data), 500))
 	}
 	return result, nil
